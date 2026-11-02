@@ -1,0 +1,269 @@
+From bccc1148e8ac29c446c10c8d759b2ee883a80c92 Mon Sep 17 00:00:00 2001
+From: Pabitra Adhikari <pabitraadhikari@gmail.com>
+Date: Fri, 30 Oct 2026 20:52:47 +0000
+Subject: [PATCH 08/11] ARM: dts: r7s9210-rza2mevb: add VDC6 LCD, D/AVE 2D and
+ touchscreen
+
+VDC6 and D/AVE SoC nodes, LCD and IRQ3 pins, 800x480 RSK TFT panel with frame buffer at 0x80000000 and double buffering, D/AVE vidmem at 0x80200000 (1 MB), FT5x06 touch on RIIC3 (edt,edt-ft5306).
+
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ .../arm/boot/dts/renesas/r7s9210-rza2mevb.dts | 245 ++++++++++++++++++
+ 1 file changed, 245 insertions(+)
+
+diff --git a/arch/arm/boot/dts/renesas/r7s9210-rza2mevb.dts b/arch/arm/boot/dts/renesas/r7s9210-rza2mevb.dts
+index 5e6ceff39..a8bc4a32a 100644
+--- a/arch/arm/boot/dts/renesas/r7s9210-rza2mevb.dts
++++ b/arch/arm/boot/dts/renesas/r7s9210-rza2mevb.dts
+@@ -269,3 +269,248 @@ &usb2_phy1 {
+ &usb_x1_clk {
+ 	clock-frequency = <48000000>;
+ };
++
++/* VDC6 LCD, D/AVE 2D and touchscreen */
++&{/soc} {
++	vdc6: display@fcff7400 {
++			compatible = "renesas,r7s9210-vdc6fb";
++			reg = <0xfcff7400 0x00000700>,
++			      <0xfcff6000 0x00001000>,
++			      <0xfcff7a30 0x00000030>;
++			reg-names = "reg", "clut", "lvds";
++			interrupts = <GIC_SPI 41 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 42 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 43 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 44 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 45 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 46 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 47 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 48 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 49 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 50 IRQ_TYPE_LEVEL_HIGH>;
++			channel = <0>;
++			clocks = <&cpg CPG_MOD 81>;
++			power-domains = <&cpg>;
++
++			status = "disabled";
++		};
++
++	drw: gpu@e820a000 {
++			compatible = "tes,dave2d-1.0";
++			reg = <0xe820a000 0xec>;
++			interrupts = <GIC_SPI 54 IRQ_TYPE_LEVEL_HIGH>;
++			//vidmem = <0x80200000 0x100000>;	/* to be filled in by board dts */
++			clocks = <&cpg CPG_MOD 76>;
++			power-domains = <&cpg>;
++
++			status = "disabled";
++		};
++};
++
++&pinctrl {
++	vdc6_pins: vdc6 {
++		pinmux =
++#if 1 /* Parallel Interface */
++			<RZA2_PINMUX(PORTF, 7, 3)>, // LCD0_DATA0
++			<RZA2_PINMUX(PORTH, 2, 3)>, // LCD0_DATA1
++			<RZA2_PINMUX(PORTF, 6, 3)>, // LCD0_DATA2
++			<RZA2_PINMUX(PORTF, 5, 3)>, // LCD0_DATA3
++			<RZA2_PINMUX(PORTF, 4, 3)>, // LCD0_DATA4
++			<RZA2_PINMUX(PORTF, 3, 3)>, // LCD0_DATA5
++			<RZA2_PINMUX(PORTF, 2, 3)>, // LCD0_DATA6
++			<RZA2_PINMUX(PORTF, 1, 3)>, // LCD0_DATA7
++			<RZA2_PINMUX(PORTF, 0, 3)>, // LCD0_DATA8
++			<RZA2_PINMUX(PORT8, 0, 3)>, // LCD0_DATA9
++			<RZA2_PINMUX(PORTA, 0, 3)>, // LCD0_DATA10
++			<RZA2_PINMUX(PORTA, 1, 3)>, // LCD0_DATA11
++			<RZA2_PINMUX(PORTA, 2, 3)>, // LCD0_DATA12
++			<RZA2_PINMUX(PORTA, 3, 3)>, // LCD0_DATA13
++			<RZA2_PINMUX(PORTA, 4, 3)>, // LCD0_DATA14
++			<RZA2_PINMUX(PORTA, 5, 3)>, // LCD0_DATA15
++			<RZA2_PINMUX(PORTA, 6, 3)>, // LCD0_DATA16
++			<RZA2_PINMUX(PORTA, 7, 3)>, // LCD0_DATA17
++			<RZA2_PINMUX(PORTB, 0, 3)>, // LCD0_DATA18
++			<RZA2_PINMUX(PORTB, 1, 3)>, // LCD0_DATA19
++			<RZA2_PINMUX(PORTB, 2, 3)>, // LCD0_DATA20
++			<RZA2_PINMUX(PORTB, 3, 3)>, // LCD0_DATA21
++			<RZA2_PINMUX(PORTB, 4, 3)>, // LCD0_DATA22
++			<RZA2_PINMUX(PORTB, 5, 3)>, // LCD0_DATA23
++			<RZA2_PINMUX(PORT7, 7, 3)>, // LCD0_TCON0
++			<RZA2_PINMUX(PORT7, 6, 3)>, // LCD0_TCON1
++		//	<RZA2_PINMUX(PORTC, 5, 5)>, // LCD0_TCON2	/* not used on this board */
++			<RZA2_PINMUX(PORTC, 4, 5)>, // LCD0_TCON3
++			<RZA2_PINMUX(PORTC, 3, 5)>, // LCD0_TCON4
++		//	<RZA2_PINMUX(PORTC, 2, 5)>, // LCD0_TCON5	/* not used on this board */
++		//	<RZA2_PINMUX(PORTC, 1, 5)>, // LCD0_TCON6	/* not used on this board */
++			<RZA2_PINMUX(PORTJ, 6, 3)>; // LCD0_CLK
++#else /* LVDS Interface  */
++			<RZA2_PINMUX(PORT4, 0, 2)>, // TXOUT0P
++			<RZA2_PINMUX(PORT4, 1, 2)>, // TXOUT0M
++			<RZA2_PINMUX(PORT4, 2, 2)>, // TXOUT1P
++			<RZA2_PINMUX(PORT4, 3, 2)>, // TXOUT1M
++			<RZA2_PINMUX(PORT4, 4, 2)>, // TXOUT2P
++			<RZA2_PINMUX(PORT4, 5, 2)>, // TXOUT2M
++			<RZA2_PINMUX(PORT4, 6, 2)>, // TXCLKOUTP
++			<RZA2_PINMUX(PORT4, 7, 2)>; // TXCLKOUTM
++#endif
++	};
++
++	irq3_pins: irq3 {
++		pinmux = <RZA2_PINMUX(PORT5, 7, 2)>;	/* IRQ3 */
++	};
++};
++
++&i2c3 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&i2c3_pins>;
++
++	status = "okay";
++	clock-frequency = <400000>;
++
++	ft5x06_ts@38 {
++		compatible = "edt,edt-ft5306";
++		reg = <0x38>;
++
++		pinctrl-names = "default";
++		pinctrl-0 = <&irq3_pins>;
++		interrupt-parent = <&irqc>;
++		interrupts = <3 IRQ_TYPE_LEVEL_LOW>;	/* IRQ3 */
++
++		touchscreen-size-x = <800>;
++		touchscreen-size-y = <480>;
++
++		/* The touchscreen on the RSK LCD is backwards for some reason */
++	};
++
++	/* Renesas R1EX24128 EEPROM */
++	/* 'eeprom' will show up under:
++	 * /sys/bus/i2c/devices/3-0050/
++	 */
++        eeprom@50 {
++                compatible = "renesas,24c128", "atmel,24c128";
++                reg = <0x50>;
++                pagesize = <64>;
++        };
++};
++
++/* ========== LCD 24-bit Parallel Interface ========== */
++#if 1
++
++/* 800x480 RSK LCD - 24-bit Parallel Interface */
++
++/* Pacer TFT LCD Panel, Model gwp0700cnwv04 */
++#define XIP_KERNEL_WITHOUT_EXTERNAL_RAM 0
++#if XIP_KERNEL_WITHOUT_EXTERNAL_RAM
++  #define VDC6_BPP 16 /* 16bpp or 32bpp */
++  #define VDC6_FBSIZE (480*272*VDC6_BPP/8)	/* Emulated WQVGA screen */
++  #define VDC6_FB_ADDR 0	/* allocate memory at probe */
++#else
++  #define VDC6_BPP 16 /* 16bpp or 32bpp */
++  #define VDC6_FBSIZE (800*480*VDC6_BPP/8)
++  #define VDC6_FB_ADDR (0x80000000) /* fixed address in PAGE 0 */
++#endif
++
++/* VDC6 */
++/* RSK LCD: 800x600 LCD */
++/* Pacer TFT LCD Panel, Model gwp0700cnwv04 */
++/* Parallel IF */
++&vdc6 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&vdc6_pins>;
++
++	display = <&display0>;
++	status = "okay";
++
++	/* Set the physical frame buffer address for internal RAM. */
++	fb_phys_addr = <VDC6_FB_ADDR>;
++	fb_phys_size = <VDC6_FBSIZE>;
++
++	panel_name = "gwp0700cnwv04";
++	panel_pixel_xres = <800>;	/* panel native resolution */
++	panel_pixel_yres = <480>;	/* panel native resolution */
++
++	/* If using the "RZ/A2M RGB -> HDMI Board" to connect directly
++	 * to a monitor, you might need to adjust the panel resolution
++	 * to 854 x 480. Please uncomment the line below.
++	 */
++	//panel_pixel_xres = <854>; panel_pixel_yres = <480>;	/* 854x480 */
++
++	/* See 'drivers/video/fbdev/renesas/vdc5fb.h' for valid choices
++	* for panel_icksel, panel_ocksel, and out_format */
++	panel_icksel = <3>;	/* 3=ICKSEL_P1CLK (Peripheral clock 1) */
++	panel_ocksel = <0>;	/* (don't care when lvds=0 ) */
++	out_format = <0>;	/* 0=OUT_FORMAT_RGB888 */
++	use_lvds = <0>;		/* Set to 0 or 1 */
++
++	/* How are the TCON pins going to be used */
++	tcon_sel = <
++		0	/* TCON0:    0=TCON_SEL_STVA (VSYNC) */
++		0xff	/* TCON1: 0xff=TCON_SEL_UNUSED */
++		0xff	/* TCON2: 0xff=TCON_SEL_UNUSED */
++		2	/* TCON3:    2=TCON_SEL_STH (HSYNC) */
++		7	/* TCON4:    7=TCON_SEL_DE (DATA ENABLE) */
++		0xff	/* TCON5: 0xff=TCON_SEL_UNUSED */
++		0xff	/* TCON6: 0xff=TCON_SEL_UNUSED */
++		>;
++
++	display0: display0 {
++		bits-per-pixel = <VDC6_BPP>;
++		bus-width = <24>;
++
++		display-timings {
++			native-mode = <&timing0>;
++			timing0: timing0 {
++				clock-frequency = <33000000>; /* P1 clk / 2 */
++#if XIP_KERNEL_WITHOUT_EXTERNAL_RAM
++				hactive = <480>;
++				vactive = <272>;
++#else
++				hactive = <800>;
++				vactive = <480>;
++#endif
++				hback-porch = <26>;		/* back porch = 'HS Blanking'(46) - hsync-len(20) */
++				hfront-porch = <210>;		/* 'HS Front Porch (210)' */
++				vback-porch = <13>;		/* back porch = 'VS Blanking'(23) - vsync-len(10) */
++				vfront-porch = <22>;		/* 'VS Front Porch(22)' */
++				hsync-len = <20>;		/* pulse width of HSYNC (min=1, max=40) */
++				vsync-len = <10>;		/* pulse width of VSYNC (min=1, max=20) */
++				hsync-active = <1>; 		/* HSYNC pulse is: 0=Active LOW, 1=Active HIGH */
++				vsync-active = <1>; 		/* VSYNC pulse is: 0=Active LOW, 1=Active HIGH */
++				de-active = <0>; 		/* Data Enable signal is: 0=Active LOW , 1= Active HIGH */
++				pixelclk-active = <0>; 		/* Pixel Data clocked on: 0=Negative clock edge */
++			};
++		};
++	};
++};
++#endif /* Parallel LCD */
++
++/* Requires CONFIG_DAVE2D=y */
++#if 1
++&drw {
++	/* vidmem:
++	 * The D/AVE driver needs dedicated physical memory to hold things
++	 * like rendering command buffers.
++	 * Also, the memory defined by vidmem can be divided up and passed
++	 * to the user application to be used as graphics buffers.
++	 * See API functions d1_allocvidmem() and d1_freevidmem() in the
++	 * DAVE2D driver.
++	 *
++	 * Remember, if you enabled 'double_buffer' in the VDC6 driver,
++	 * twice as much memory will be allocated, so start your vidmem
++	 * after that area.
++	 *
++	 * Note, the size must be a multiple of 1MB */
++	vidmem = <0x80200000 0x100000>;
++
++	status = "okay";
++};
++
++&vdc6 {
++
++	/* Double Buffering. Reserves 2x memory space as frame buffer */
++	/* Use "ioctl(fb0_fd, FBIOPAN_DISPLAY, &var)" from application
++	 * space to change "var.yoffset=Y" where 'Y' is from 0 to var.yres
++	 */
++	double_buffer;
++};
++#endif
+-- 
+2.34.1
+

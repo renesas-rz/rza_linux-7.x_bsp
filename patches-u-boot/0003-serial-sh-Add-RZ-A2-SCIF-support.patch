@@ -1,0 +1,118 @@
+From 53b29e97c5a0c8fb666ea751e6637430f22bc2bc Mon Sep 17 00:00:00 2001
+From: Magnus Damm <damm@opensource.se>
+Date: Sun, 6 Jul 2025 13:29:14 +0200
+Subject: [PATCH 03/13] serial: sh: Add RZ/A2 SCIF support
+
+Add SCIF support for RZ/A2 r7s9210 including a work around to prevent
+the driver from hanging on boot due to TEND flag handling.
+
+Signed-off-by: Magnus Damm <damm@opensource.se>
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ drivers/serial/serial_sh.c | 26 +++++++++++++++++++++-----
+ drivers/serial/serial_sh.h | 15 +++++++++++++++
+ 2 files changed, 36 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/serial/serial_sh.c b/drivers/serial/serial_sh.c
+index 7debff6c..eab38f80 100644
+--- a/drivers/serial/serial_sh.c
++++ b/drivers/serial/serial_sh.c
+@@ -46,7 +46,9 @@ static int scif_rxfill(struct uart_port *port)
+ }
+ #endif
+ 
+-static void sh_serial_init_generic(struct uart_port *port)
++static void sh_serial_init_generic(struct uart_port *port,
++				   const void *blob,
++				   int node)
+ {
+ 	sci_out(port, SCSCR , SCSCR_INIT(port));
+ 	sci_out(port, SCSCR , SCSCR_INIT(port));
+@@ -55,10 +57,23 @@ static void sh_serial_init_generic(struct uart_port *port)
+ 	sci_out(port, SCFCR, SCFCR_RFRST|SCFCR_TFRST);
+ 	sci_in(port, SCFCR);
+ 	sci_out(port, SCFCR, 0);
+-#if defined(CONFIG_RZA1)
++#if defined(CONFIG_RZA1) || defined(CONFIG_RZA2)
+ 	sci_out(port, SCSPTR, 0x0003);
+ #endif
+-
++#if defined(CONFIG_RZA2)
++	/* For SCIF on RZ/A2, the default value of TEND after reset is 0,
++	 * however this driver expects it to be 1, so without this workaround
++	 * we will get stuck waiting and never send out the first character.
++	 * To remedy the situation, send a character with loopback enabled.
++	 */
++	if (fdt_node_check_compatible(blob, node, "renesas,scif-r7s9210") == 0) {
++		sci_out(port, SCFCR, 1); /* enable loopback */
++		sci_out(port, SCxTDR, 'Z'); /* TX data */
++		mdelay(10);
++		sci_out(port, SCFCR, 6); /* assert FIFO reset to clear RX data */
++		sci_out(port, SCFCR, 0); /* deassert FIFO reset, disable loopback */
++	}
++#endif
+ #if IS_ENABLED(CONFIG_RCAR_GEN2) || IS_ENABLED(CONFIG_RCAR_GEN3) || IS_ENABLED(CONFIG_RCAR_GEN4) || IS_ENABLED(CONFIG_RCAR_GEN5)
+ 	if (port->type == PORT_HSCIF)
+ 		sci_out(port, HSSRR, HSSRR_SRE | HSSRR_SRCYC8);
+@@ -227,7 +242,7 @@ static int sh_serial_probe(struct udevice *dev)
+ 		}
+ 	}
+ 
+-	sh_serial_init_generic(priv);
++	sh_serial_init_generic(priv, gd->fdt_blob, dev_of_offset(dev));
+ 
+ 	return 0;
+ }
+@@ -243,6 +258,7 @@ static const struct dm_serial_ops sh_serial_ops = {
+ static const struct udevice_id sh_serial_id[] ={
+ 	{.compatible = "renesas,sci", .data = PORT_SCI},
+ 	{.compatible = "renesas,scif", .data = PORT_SCIF},
++	{.compatible = "renesas,scif-r7s9210", .data = PORT_SCIF},
+ 	{.compatible = "renesas,scif-r9a07g044", .data = PORT_SCIFA},
+ 	{.compatible = "renesas,scifa", .data = PORT_SCIFA},
+ 	{.compatible = "renesas,hscif", .data = PORT_HSCIF},
+@@ -306,7 +322,7 @@ U_BOOT_DRIVER(serial_sh) = {
+ 
+ static void sh_serial_init_nodm(struct uart_port *port)
+ {
+-	sh_serial_init_generic(port);
++	sh_serial_init_generic(port, NULL, 0);
+ 	serial_setbrg();
+ }
+ 
+diff --git a/drivers/serial/serial_sh.h b/drivers/serial/serial_sh.h
+index 58c2d22b..1bba96c4 100644
+--- a/drivers/serial/serial_sh.h
++++ b/drivers/serial/serial_sh.h
+@@ -98,6 +98,9 @@ struct uart_port {
+ # endif
+ # define SCSCR_INIT(port)	(port->clk_mode == EXT_CLK ? 0x32 : 0x30)
+ 				/* TIE=0,RIE=0,TE=1,RE=1,REIE=0, */
++#elif defined(CONFIG_RZA2)
++# define SCIF_ORER 0x0001               /* Overrun error bit */
++# define SCSCR_INIT(port)       0x30    /* TIE=0,RIE=0,TE=1,RE=1,REIE=0 */
+ #else
+ # error CPU subtype not defined
+ #endif
+@@ -390,6 +393,18 @@ SCIF_FNS(SCLSR,  0,  0, 0x14, 16)
+ #else
+ SCIF_FNS(SCLSR,  0,  0, 0x24, 16)
+ #endif
++#elif defined(CONFIG_RZA2)
++SCIF_FNS(SCSMR,  0x00, 8, 0x00, 16)
++SCIF_FNS(SCBRR,  0x01, 8, 0x02,  8)
++SCIF_FNS(SCSCR,  0x02, 8, 0x04, 16)
++SCIF_FNS(SCxTDR, 0x03, 8, 0x06,  8)
++SCIF_FNS(SCxSR,  0x04, 8, 0x08, 16)
++SCIF_FNS(SCxRDR, 0x05, 8, 0x0A,  8)
++SCIF_FNS(SCFCR,     0, 0, 0x0C, 16)
++SCIF_FNS(SCFDR,     0, 0, 0x0E, 16)
++SCIF_FNS(SCSPTR,    0, 0, 0x10, 16)
++SCIF_FNS(SCLSR,     0, 0, 0x12,  16)
++SCIF_FNS(DL,        0, 0, 0x00,  0) /* dummy */
+ #elif defined(CONFIG_RZG2L)
+ SCIF_FNS(SCSMR,  0x00, 16)
+ SCIF_FNS(SCBRR,  0x02,  8)
+-- 
+2.34.1
+

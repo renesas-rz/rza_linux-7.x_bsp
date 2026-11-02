@@ -1,0 +1,124 @@
+From 482601ac90e42bb34c071996615fff841f7734f3 Mon Sep 17 00:00:00 2001
+From: Pabitra Adhikari <pabitraadhikari@gmail.com>
+Date: Wed, 4 Nov 2026 15:03:04 -0800
+Subject: [PATCH 12/13] board: rza2mevb: Module clocks at early init, default
+ environment
+
+Enable the module clocks (STBCR3 to STBCR11) and initialize HyperRAM
+in board_early_init_f, before the console starts.
+
+Add the xha_boot environment command (QSPI quad I/O DDR XIP read mode,
+copy the device tree to HyperRAM, bootx) and boot it by default.
+
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ board/renesas/rza2mevb/rza2mevb.c | 38 +++++++++++++++++++++++++++++--
+ configs/rza2mevb_defconfig        |  3 +++
+ include/configs/rza2mevb.h        | 12 ++++++++++
+ 3 files changed, 51 insertions(+), 2 deletions(-)
+
+diff --git a/board/renesas/rza2mevb/rza2mevb.c b/board/renesas/rza2mevb/rza2mevb.c
+index 037f7a33..ac8ed99e 100644
+--- a/board/renesas/rza2mevb/rza2mevb.c
++++ b/board/renesas/rza2mevb/rza2mevb.c
+@@ -10,9 +10,14 @@
+ #include <asm/global_data.h>
+ #include <asm/io.h>
+ #include <linux/bitops.h>
++#include <linux/kernel.h>
+ 
+ #define SCLKSEL			0xFCFE0104	/* 16-bit */
+ 
++/* Standby control: 1 = module stopped */
++#define STBCR_BASE		0xFCFE0020
++#define STBCR(n)		(STBCR_BASE + 0x400 + ((n) - 3) * 4)	/* STBCR3 to STBCR11 */
++
+ #define PFC_BASE		0xFCFFE000
+ #define PPOC			(PFC_BASE + 0x0900)
+ #define PHMOMO			(PFC_BASE + 0x0980)
+@@ -35,6 +40,29 @@
+ 
+ DECLARE_GLOBAL_DATA_PTR;
+ 
++/* Module standby (STBCR3 to STBCR11) values */
++static const u8 stbcr_val[] = {
++	0x80,	/* STBCR3: OSTM, MTU3, CAN-FD, ADC, GPT */
++	0x00,	/* STBCR4: SCIF0-4, SCI0-1, IrDA */
++	0x31,	/* STBCR5: A/D, CEU, RTC0-1, JCU */
++	0x80,	/* STBCR6: VIN, ETHER0-1, EtherPTR, EtherM, USB0-1 */
++	0x10,	/* STBCR7: IMR-LS2, DAVE-2D, MIPI, SSIF0-3 */
++	0x05,	/* STBCR8: IIC0-3, SPIBSC, VDC6 */
++	0x10,	/* STBCR9: RSPI0-2, HYPER, OCTA, SPDIF, DRP */
++	0x00,	/* STBCR10: TSIP, SDHI00-11 */
++	0x3F,	/* STBCR11: POE3, POEG */
++};
++
++static void stbcr_init(void)
++{
++	int i;
++
++	for (i = 0; i < ARRAY_SIZE(stbcr_val); i++) {
++		writeb(stbcr_val[i], STBCR(i + 3));
++		readb(STBCR(i + 3));		/* dummy read */
++	}
++}
++
+ /* HyperRAM (8 MB at 0x40000000) is the Linux system RAM; U-Boot runs in on-chip RAM */
+ static void hyperram_init(void)
+ {
+@@ -50,12 +78,18 @@ static void hyperram_init(void)
+ 	writel(0xFFFFFFFE, PHMOMO);	/* select HyperBus */
+ }
+ 
++/* Runs before the console starts */
++int board_early_init_f(void)
++{
++	stbcr_init();
++	hyperram_init();
++	return 0;
++}
++
+ int board_init(void)
+ {
+ 	gd->bd->bi_boot_params = CFG_SYS_SDRAM_BASE + 0x100;
+ 
+-	hyperram_init();
+-
+ 	/* QSPI clock P0 (33 MHz) -> B (132 MHz), SPI clock 66 MHz */
+ 	setbits_le16(SCLKSEL, 2);
+ 
+diff --git a/configs/rza2mevb_defconfig b/configs/rza2mevb_defconfig
+index 8620ca89..e9b8ad25 100644
+--- a/configs/rza2mevb_defconfig
++++ b/configs/rza2mevb_defconfig
+@@ -15,3 +15,6 @@ CONFIG_SPI_FLASH=y
+ CONFIG_SPI_FLASH_MACRONIX=y
+ CONFIG_CMD_BOOTX=y
+ CONFIG_CMD_RZA2_QSPI=y
++CONFIG_BOARD_EARLY_INIT_F=y
++CONFIG_USE_BOOTCOMMAND=y
++CONFIG_BOOTCOMMAND="run xha_boot"
+diff --git a/include/configs/rza2mevb.h b/include/configs/rza2mevb.h
+index 4a3ab42d..0a898abf 100644
+--- a/include/configs/rza2mevb.h
++++ b/include/configs/rza2mevb.h
+@@ -23,4 +23,16 @@
+ #define CFG_SH_ETHER_CACHE_INVALIDATE
+ #define CFG_SH_ETHER_ALIGNE_SIZE	64
+ 
++
++/*
++ * xha_boot: XIP kernel from QSPI flash, system RAM in 8 MB HyperRAM
++ * 1. QSPI quad I/O DDR XIP read mode
++ * 2. Copy the device tree from QSPI flash (0x200C0000) to HyperRAM (0x40300000)
++ * 3. Boot the XIP kernel at 0x20200000
++ */
++#define CFG_EXTRA_ENV_SETTINGS \
++	"xha_boot=qspi single a4 d4 ddr; " \
++		"cp.b 0x200C0000 0x40300000 10000 ; " \
++		"bootx 0x20200000 0x40300000\0"
++
+ #endif	/* __RZA2MEVB_H */
+-- 
+2.34.1
+

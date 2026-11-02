@@ -1,0 +1,115 @@
+From a6c002013254e937e256226b225f4a7182173ce6 Mon Sep 17 00:00:00 2001
+From: Pabitra Adhikari <pabitraadhikari@gmail.com>
+Date: Wed, 4 Nov 2026 14:35:51 -0800
+Subject: [PATCH 10/13] cmd: Add bootx command for XIP kernels
+
+Add the bootx command to start a Linux kernel that executes in place
+(XIP) from flash: bootx <kernel addr> <dtb addr> cleans up the caches
+and jumps to the kernel with r2 pointing to the device tree.
+
+Enable it for the RZ/A2M EVK.
+
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ cmd/Kconfig                |  7 ++++++
+ cmd/Makefile               |  1 +
+ cmd/bootx.c                | 47 ++++++++++++++++++++++++++++++++++++++
+ configs/rza2mevb_defconfig |  1 +
+ 4 files changed, 56 insertions(+)
+ create mode 100644 cmd/bootx.c
+
+diff --git a/cmd/Kconfig b/cmd/Kconfig
+index ff90a870..d1e4dc0d 100644
+--- a/cmd/Kconfig
++++ b/cmd/Kconfig
+@@ -385,6 +385,13 @@ config BOOTM_ELF
+ 	help
+ 	  Support booting ELF images via the bootm command.
+ 
++config CMD_BOOTX
++	bool "bootx"
++	depends on ARM
++	help
++	  Boot an XIP kernel that runs in place from flash, with r2 set
++	  to the device tree address (Renesas RZ/A).
++
+ config CMD_BOOTZ
+ 	bool "bootz"
+ 	depends on LMB
+diff --git a/cmd/Makefile b/cmd/Makefile
+index ce772e55..dbf0f8ab 100644
+--- a/cmd/Makefile
++++ b/cmd/Makefile
+@@ -37,6 +37,7 @@ obj-$(CONFIG_CMD_BOOTCOUNT) += bootcount.o
+ obj-$(CONFIG_CMD_BOOTEFI) += bootefi.o
+ obj-$(CONFIG_CMD_BOOTMENU) += bootmenu.o
+ obj-$(CONFIG_CMD_BOOTSTAGE) += bootstage.o
++obj-$(CONFIG_CMD_BOOTX) += bootx.o
+ obj-$(CONFIG_CMD_BOOTZ) += bootz.o
+ obj-$(CONFIG_CMD_BOOTI) += booti.o
+ obj-$(CONFIG_CMD_BTRFS) += btrfs.o
+diff --git a/cmd/bootx.c b/cmd/bootx.c
+new file mode 100644
+index 00000000..d1c1e84b
+--- /dev/null
++++ b/cmd/bootx.c
+@@ -0,0 +1,47 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * bootx: boot an XIP kernel that runs in place from flash
++ *
++ * Copyright (C) 2017 Renesas Electronics
++ * Copyright (C) 2017 Chris Brandt
++ */
++
++#include <command.h>
++#include <cpu_func.h>
++#include <stdio.h>
++#include <vsprintf.h>
++#include <asm/u-boot-arm.h>
++
++static int do_bootx(struct cmd_tbl *cmdtp, int flag, int argc,
++		    char *const argv[])
++{
++	void (*kernel_entry)(int zero, int arch, uint params);
++	ulong img_addr, dt_addr;
++
++	if (argc < 3)
++		return CMD_RET_USAGE;
++
++	img_addr = hextoul(argv[1], NULL);
++	dt_addr = hextoul(argv[2], NULL);
++	kernel_entry = (void (*)(int, int, uint))img_addr;
++
++	cleanup_before_linux();
++
++	/*
++	 * r0 = 0, r1 = machine type (~0: device tree boot), r2 = DTB address
++	 * See Documentation/arch/arm/booting.rst in the Linux kernel.
++	 */
++	printf("Booting Linux...\n");
++	kernel_entry(0, 0xFFFFFFFF, dt_addr);
++
++	return 0;
++}
++
++U_BOOT_CMD(
++	bootx, 3, 1, do_bootx,
++	"boot XIP kernel in Flash",
++	"x_addr dt_addr\n"
++	"    - boot XIP kernel in Flash\n"
++	"\t x_addr: Address of XIP kernel in Flash\n"
++	"\tdt_addr: Address of Device Tree blob image"
++);
+diff --git a/configs/rza2mevb_defconfig b/configs/rza2mevb_defconfig
+index 4c35b042..59ae2d84 100644
+--- a/configs/rza2mevb_defconfig
++++ b/configs/rza2mevb_defconfig
+@@ -13,3 +13,4 @@ CONFIG_ENV_SECT_SIZE=0x10000
+ CONFIG_MTD=y
+ CONFIG_SPI_FLASH=y
+ CONFIG_SPI_FLASH_MACRONIX=y
++CONFIG_CMD_BOOTX=y
+-- 
+2.34.1
+

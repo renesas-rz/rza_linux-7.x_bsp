@@ -1,0 +1,227 @@
+From e97f7fed61277cbb7c1cb00ac057a467da675fee Mon Sep 17 00:00:00 2001
+From: Magnus Damm <damm@opensource.se>
+Date: Sun, 6 Jul 2025 13:29:37 +0200
+Subject: [PATCH 06/13] ARM: renesas: Add RZ/A2 GR-Mango board support
+
+Add initial RZ/A2 GR-Peach board support. Serial console and Ethernet
+are known to work however on-board SDRAM is not yet enabled.
+
+Signed-off-by: Magnus Damm <damm@opensource.se>
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ arch/arm/dts/Makefile                     |  3 ++
+ arch/arm/dts/r7s9210-gr-mango-u-boot.dtsi | 28 ++++++++++++++++
+ arch/arm/mach-renesas/Kconfig.rza2        | 13 ++++++++
+ board/renesas/grmango/Kconfig             | 12 +++++++
+ board/renesas/grmango/MAINTAINERS         |  5 +++
+ board/renesas/grmango/Makefile            |  7 ++++
+ board/renesas/grmango/grmango.c           | 40 +++++++++++++++++++++++
+ configs/grmango_defconfig                 | 10 ++++++
+ include/configs/grmango.h                 | 15 +++++++++
+ 9 files changed, 133 insertions(+)
+ create mode 100644 arch/arm/dts/r7s9210-gr-mango-u-boot.dtsi
+ create mode 100644 board/renesas/grmango/Kconfig
+ create mode 100644 board/renesas/grmango/MAINTAINERS
+ create mode 100644 board/renesas/grmango/Makefile
+ create mode 100644 board/renesas/grmango/grmango.c
+ create mode 100644 configs/grmango_defconfig
+ create mode 100644 include/configs/grmango.h
+
+diff --git a/arch/arm/dts/Makefile b/arch/arm/dts/Makefile
+index 37d3b6fd..ad7ce045 100644
+--- a/arch/arm/dts/Makefile
++++ b/arch/arm/dts/Makefile
+@@ -868,6 +868,9 @@ dtb-$(CONFIG_RZA1) += \
+ 	r7s72100-genmai.dtb \
+ 	r7s72100-gr-peach.dtb
+ 
++dtb-$(CONFIG_RZA2) += \
++	r7s9210-gr-mango.dtb
++
+ dtb-$(CONFIG_RCAR_GEN3) += \
+ 	r8a779md-geist.dtb
+ 
+diff --git a/arch/arm/dts/r7s9210-gr-mango-u-boot.dtsi b/arch/arm/dts/r7s9210-gr-mango-u-boot.dtsi
+new file mode 100644
+index 00000000..ce30da63
+--- /dev/null
++++ b/arch/arm/dts/r7s9210-gr-mango-u-boot.dtsi
+@@ -0,0 +1,28 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Device Tree Source extras for U-Boot for the GR Mango board
++ * Based on GR Peach, Copyright (C) 2019 Marek Vasut <marek.vasut@gmail.com>
++ */
++
++/ {
++	soc {
++		bootph-all;
++	};
++};
++
++&ostm0 {
++	bootph-all;
++};
++
++&pinctrl {
++	bootph-all;
++};
++
++&scif0 {
++	bootph-all;
++	clock = <66666666>;     /* ToDo: Replace by DM clock driver */
++};
++
++&scif0_pins {
++	bootph-all;
++};
+diff --git a/arch/arm/mach-renesas/Kconfig.rza2 b/arch/arm/mach-renesas/Kconfig.rza2
+index 99e6ca5e..9ae495c9 100644
+--- a/arch/arm/mach-renesas/Kconfig.rza2
++++ b/arch/arm/mach-renesas/Kconfig.rza2
+@@ -4,4 +4,17 @@ config CPU_RZA2
+ 	bool
+ 	default y
+ 
++choice
++	prompt "Renesas RZ/A2 board select"
++
++# Renesas Supported Boards
++config TARGET_GRMANGO
++	bool "GR-MANGO board"
++
++endchoice
++
++# Renesas Supported Boards
++source "board/renesas/grmango/Kconfig"
++
++
+ endif
+diff --git a/board/renesas/grmango/Kconfig b/board/renesas/grmango/Kconfig
+new file mode 100644
+index 00000000..092cd74e
+--- /dev/null
++++ b/board/renesas/grmango/Kconfig
+@@ -0,0 +1,12 @@
++if TARGET_GRMANGO
++
++config SYS_BOARD
++	default "grmango"
++
++config SYS_VENDOR
++	default "renesas"
++
++config SYS_CONFIG_NAME
++	default "grmango"
++
++endif
+diff --git a/board/renesas/grmango/MAINTAINERS b/board/renesas/grmango/MAINTAINERS
+new file mode 100644
+index 00000000..70660cba
+--- /dev/null
++++ b/board/renesas/grmango/MAINTAINERS
+@@ -0,0 +1,5 @@
++GRMANGO BOARD
++M:	Magnus Damm <damm@opensource.se>
++F:	arch/arm/dts/r7s9210*
++F:	board/renesas/grmango/
++N:	grmango
+diff --git a/board/renesas/grmango/Makefile b/board/renesas/grmango/Makefile
+new file mode 100644
+index 00000000..076ad1e9
+--- /dev/null
++++ b/board/renesas/grmango/Makefile
+@@ -0,0 +1,7 @@
++#
++# Copyright (C) 2018 Renesas Electronics
++# Copyright (C) 2018 Chris Brandt
++#
++# SPDX-License-Identifier:	GPL-2.0+
++
++obj-y	:= grmango.o
+diff --git a/board/renesas/grmango/grmango.c b/board/renesas/grmango/grmango.c
+new file mode 100644
+index 00000000..9a067fc0
+--- /dev/null
++++ b/board/renesas/grmango/grmango.c
+@@ -0,0 +1,40 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright (C) 2017 Renesas Electronics
++ * Copyright (C) Chris Brandt
++ */
++
++#include <init.h>
++#include <linux/io.h>
++#include <asm/global_data.h>
++
++DECLARE_GLOBAL_DATA_PTR;
++
++int board_init(void)
++{
++	gd->bd->bi_boot_params = CFG_SYS_SDRAM_BASE + 0x100;
++
++	/* configure PFENET register to use MII for Ethernet */
++	writeb(0x00, 0xfcffe2ff);
++	writeb(0x40, 0xfcffe2ff);
++	writeb(0x02, 0xfcffe820);
++	return 0;
++}
++
++/*
++ * Make use of the RZ/A2M on-chip memory which is 4 MiB at CFG_SYS_SDRAM_BASE.
++ */
++
++int dram_init(void)
++{
++	gd->ram_base = CFG_SYS_SDRAM_BASE;
++	gd->ram_size = 4 << 20;
++	return 0;
++}
++
++int dram_init_banksize(void)
++{
++	gd->bd->bi_dram[0].start = gd->ram_base;
++	gd->bd->bi_dram[0].size = gd->ram_size;
++	return 0;
++}
+diff --git a/configs/grmango_defconfig b/configs/grmango_defconfig
+new file mode 100644
+index 00000000..ca9436dc
+--- /dev/null
++++ b/configs/grmango_defconfig
+@@ -0,0 +1,10 @@
++#include <configs/renesas_rza2.config>
++
++CONFIG_ARM=y
++CONFIG_ARCH_RENESAS=y
++CONFIG_TEXT_BASE=0x00000000
++CONFIG_POSITION_INDEPENDENT=y
++CONFIG_DEFAULT_DEVICE_TREE="renesas/r7s9210-gr-mango"
++CONFIG_TARGET_GRMANGO=y
++
++CONFIG_ENV_IS_NOWHERE=y
+diff --git a/include/configs/grmango.h b/include/configs/grmango.h
+new file mode 100644
+index 00000000..a76d295a
+--- /dev/null
++++ b/include/configs/grmango.h
+@@ -0,0 +1,15 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Configuration settings for the Renesas GRMANGO board
++ *
++ * Copyright (C) 2017-2019 Renesas Electronics
++ */
++
++#ifndef __GRMANGO_H
++#define __GRMANGO_H
++
++/* Internal RAM Size: RZ/A2M = 4MB */
++#define CFG_SYS_SDRAM_BASE           0x80000000
++#define CFG_SYS_SDRAM_SIZE           (4 * 1024 * 1024)
++
++#endif	/* __GRMANGO_H */
+-- 
+2.34.1
+

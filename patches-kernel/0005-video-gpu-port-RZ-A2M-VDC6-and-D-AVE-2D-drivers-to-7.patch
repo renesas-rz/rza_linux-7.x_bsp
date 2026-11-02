@@ -1,0 +1,144 @@
+From ebbcd39d16ca9f654348527e17f4b6cc4570f055 Mon Sep 17 00:00:00 2001
+From: Pabitra Adhikari <pabitraadhikari@gmail.com>
+Date: Fri, 30 Oct 2026 20:12:55 +0000
+Subject: [PATCH 05/11] video, gpu: port RZ/A2M VDC6 and D/AVE 2D drivers to
+ 7.x APIs
+
+ioremap_nocache -> ioremap; FBINFO_FLAG_DEFAULT removed; class_create() without THIS_MODULE; platform remove() returns void; select FB_SYSMEM_HELPERS (FB_SYS_FOPS was renamed).
+
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ drivers/gpu/dave2d/tes_dave.c        |  9 ++++-----
+ drivers/video/fbdev/renesas/Kconfig  |  5 +----
+ drivers/video/fbdev/renesas/vdc5fb.c | 14 ++++++--------
+ 3 files changed, 11 insertions(+), 17 deletions(-)
+
+diff --git a/drivers/gpu/dave2d/tes_dave.c b/drivers/gpu/dave2d/tes_dave.c
+index a7f200943..500f96f8c 100755
+--- a/drivers/gpu/dave2d/tes_dave.c
++++ b/drivers/gpu/dave2d/tes_dave.c
+@@ -148,7 +148,7 @@ static int dave2d_setup_device(struct dave2d_dev *dev)
+ 		goto CHR_FAILED;
+ 	}
+ 
+-	dave_class = class_create(THIS_MODULE, DAVE2D_DEVICE_CLASS);
++	dave_class = class_create(DAVE2D_DEVICE_CLASS);
+ 	if(!dave_class)
+ 	{
+ 		dev_err(dev->device, "cannot create class %s\n", DAVE2D_DEVICE_CLASS);
+@@ -269,7 +269,7 @@ static int dave2d_probe(struct platform_device *pdev)
+ 		goto REQ_VID_FAILED;
+ 	}
+ 
+-	dave->base_virt = ioremap_nocache(dave->base_phys, dave->span);
++	dave->base_virt = ioremap(dave->base_phys, dave->span);
+ 	if (!dave->base_virt)
+ 	{
+ 		dev_err(&pdev->dev, "ioremap failed\n");
+@@ -277,7 +277,7 @@ static int dave2d_probe(struct platform_device *pdev)
+ 		goto IO_FAILED;
+ 	}
+ 
+-	dave->mem_base_virt = ioremap_nocache(dave->mem_base_phys, dave->mem_span);
++	dave->mem_base_virt = ioremap(dave->mem_base_phys, dave->mem_span);
+ 	if (!dave->mem_base_virt)
+ 	{
+ 		dev_err(&pdev->dev, "vidmem ioremap failed\n");
+@@ -337,7 +337,7 @@ static int dave2d_probe(struct platform_device *pdev)
+ 	return -EBUSY;
+ }
+ 
+-static int dave2d_remove(struct platform_device *pdev)
++static void dave2d_remove(struct platform_device *pdev)
+ {
+ 	struct dave2d_dev *dave = platform_get_drvdata(pdev);
+ 	unregister_irq(dave);
+@@ -347,7 +347,6 @@ static int dave2d_remove(struct platform_device *pdev)
+ 	release_mem_region(dave->mem_base_phys, dave->mem_span);
+ 	dave2d_shutdown_device(dave);
+ 	devm_kfree(&pdev->dev, dave);
+-	return 0;
+ }
+ 
+ static const struct of_device_id dave2d_of_ids[] = {
+diff --git a/drivers/video/fbdev/renesas/Kconfig b/drivers/video/fbdev/renesas/Kconfig
+index dccc9e1f7..26b89c104 100644
+--- a/drivers/video/fbdev/renesas/Kconfig
++++ b/drivers/video/fbdev/renesas/Kconfig
+@@ -2,10 +2,7 @@ config FB_VDC5
+ 	tristate "RZ/A frame-buffer driver for VDC5/VDC6"
+ 	depends on FB
+ 	depends on ARCH_R7S72100 || ARCH_R7S9210
+-	select FB_SYS_FILLRECT
+-	select FB_SYS_COPYAREA
+-	select FB_SYS_IMAGEBLIT
+-	select FB_SYS_FOPS
++	select FB_SYSMEM_HELPERS
+ 	select FB_MODE_HELPERS
+ 	select VIDEOMODE_HELPERS
+ 	help
+diff --git a/drivers/video/fbdev/renesas/vdc5fb.c b/drivers/video/fbdev/renesas/vdc5fb.c
+index deb230396..cd4d497b9 100644
+--- a/drivers/video/fbdev/renesas/vdc5fb.c
++++ b/drivers/video/fbdev/renesas/vdc5fb.c
+@@ -2098,7 +2098,7 @@ static int vdc5fb_probe(struct platform_device *pdev)
+ 		dev_err(&pdev->dev, "cannot get resources (reg)\n");
+ 		goto error;
+ 	}
+-	priv->base = ioremap_nocache(res->start, resource_size(res));
++	priv->base = ioremap(res->start, resource_size(res));
+ 	if (!priv->base) {
+ 		dev_err(&pdev->dev, "cannot ioremap (reg)\n");
+ 		goto error;
+@@ -2116,7 +2116,7 @@ static int vdc5fb_probe(struct platform_device *pdev)
+ 			dev_err(&pdev->dev, "cannot get resources (lvds)\n");
+ 			goto error;
+ 		}
+-		priv->base_lvds = ioremap_nocache(res->start, resource_size(res));
++		priv->base_lvds = ioremap(res->start, resource_size(res));
+ 		if (!priv->base_lvds) {
+ 			dev_err(&pdev->dev, "cannot ioremap (lvds)\n");
+ 			goto error;
+@@ -2254,10 +2254,10 @@ static int vdc5fb_probe(struct platform_device *pdev)
+ 		priv->fb_phys_addr = priv->pdata->fb_phys_addr;
+ 
+ 		if (pdata->double_buffer)
+-			buf = ioremap_nocache(priv->pdata->fb_phys_addr,
++			buf = ioremap(priv->pdata->fb_phys_addr,
+ 					      priv->pdata->fb_phys_size * 2);
+ 		else
+-			buf = ioremap_nocache(priv->pdata->fb_phys_addr,
++			buf = ioremap(priv->pdata->fb_phys_addr,
+ 					      priv->pdata->fb_phys_size);
+ 		priv->fb_nofree = 1;
+ 		pdata->layers[2].base = priv->pdata->fb_phys_addr;
+@@ -2279,7 +2279,7 @@ static int vdc5fb_probe(struct platform_device *pdev)
+ 		}
+ 	}
+ 
+-	info->flags = FBINFO_FLAG_DEFAULT;
++	info->flags = 0;
+ 
+ 	error = fb_alloc_cmap(&info->cmap, PALETTE_NR, 0);
+ 	if (error < 0) {
+@@ -2370,7 +2370,7 @@ static int vdc5fb_probe(struct platform_device *pdev)
+ 	return error;
+ }
+ 
+-static int vdc5fb_remove(struct platform_device *pdev)
++static void vdc5fb_remove(struct platform_device *pdev)
+ {
+ 	struct vdc5fb_priv *priv = platform_get_drvdata(pdev);
+ 	struct fb_info *info;
+@@ -2395,8 +2395,6 @@ static int vdc5fb_remove(struct platform_device *pdev)
+ 	vdc5fb_deinit_clocks(priv);
+ 
+ 	kfree(priv);
+-
+-	return 0;
+ }
+ 
+ static const struct of_device_id of_vdc5fb_match[] = {
+-- 
+2.34.1
+

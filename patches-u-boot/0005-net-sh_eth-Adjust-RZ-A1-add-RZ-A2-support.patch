@@ -1,0 +1,204 @@
+From 0435719cdb028e46ca65bb866b09538a9961184a Mon Sep 17 00:00:00 2001
+From: Magnus Damm <damm@opensource.se>
+Date: Sun, 6 Jul 2025 13:29:29 +0200
+Subject: [PATCH 05/13] net: sh_eth: Adjust RZ/A1, add RZ/A2 support
+
+Extend the sh_eth driver to also support RZ/A2. While at it fix the RZ/A1
+handling to also take the Ethernet controller base address from the DT node.
+
+Tested on:
+- RZ/A1H Genmai (MII) with U2 uPD60610 by Renesas
+- RZ/A2M GR-Mango (ch0 MII) with U13 LAN8710 by Mikrochip
+- RZ/A2M RZA2MBTC + emoEdgeExpanderV2 (ch1 RMII) with IC1 RTL8201 by Realtek
+
+Signed-off-by: Magnus Damm <damm@opensource.se>
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ drivers/net/sh_eth.c | 16 ++++++++++++----
+ drivers/net/sh_eth.h | 31 ++++++++++++++++---------------
+ 2 files changed, 28 insertions(+), 19 deletions(-)
+
+diff --git a/drivers/net/sh_eth.c b/drivers/net/sh_eth.c
+index 1160c1d6..f53d3d5d 100644
+--- a/drivers/net/sh_eth.c
++++ b/drivers/net/sh_eth.c
+@@ -144,10 +144,10 @@ static int sh_eth_reset(struct sh_eth_info *port_info)
+ {
+ #if defined(SH_ETH_TYPE_GETHER) || defined(SH_ETH_TYPE_RZ)
+ 	int ret = 0, i;
+-
++#if !defined(CONFIG_RZA2)
+ 	/* Start e-dmac transmitter and receiver */
+ 	sh_eth_write(port_info, EDSR_ENALL, EDSR);
+-
++#endif
+ 	/* Perform a software reset and wait for it to complete */
+ 	sh_eth_write(port_info, EDMR_SRST, EDMR);
+ 	for (i = 0; i < TIMEOUT_CNT; i++) {
+@@ -215,9 +215,11 @@ static int sh_eth_tx_desc_init(struct sh_eth_info *port_info)
+ 	sh_eth_write(port_info, ADDR_TO_PHY(port_info->tx_desc_base), TDLAR);
+ #if defined(SH_ETH_TYPE_GETHER) || defined(SH_ETH_TYPE_RZ)
+ 	sh_eth_write(port_info, ADDR_TO_PHY(port_info->tx_desc_base), TDFAR);
++#if !defined(CONFIG_RZA2)
+ 	sh_eth_write(port_info, ADDR_TO_PHY(cur_tx_desc), TDFXR);
+ 	sh_eth_write(port_info, 0x01, TDFFR);/* Last discriptor bit */
+ #endif
++#endif
+ 
+ err:
+ 	return ret;
+@@ -282,8 +284,10 @@ static int sh_eth_rx_desc_init(struct sh_eth_info *port_info)
+ 	sh_eth_write(port_info, ADDR_TO_PHY(port_info->rx_desc_base), RDLAR);
+ #if defined(SH_ETH_TYPE_GETHER) || defined(SH_ETH_TYPE_RZ)
+ 	sh_eth_write(port_info, ADDR_TO_PHY(port_info->rx_desc_base), RDFAR);
++#if !defined(CONFIG_RZA2)
+ 	sh_eth_write(port_info, ADDR_TO_PHY(cur_rx_desc), RDFXR);
+ 	sh_eth_write(port_info, RDFFR_RDLF, RDFFR);
++#endif
+ #endif
+ 
+ 	return ret;
+@@ -408,7 +412,7 @@ static int sh_eth_phy_regs_config(struct sh_eth_info *port_info)
+ 		sh_eth_write(port_info, GECMR_100B, GECMR);
+ #elif defined(CONFIG_CPU_SH7757) || defined(CONFIG_CPU_SH7752)
+ 		sh_eth_write(port_info, 1, RTRATE);
+-#elif defined(CONFIG_RCAR_GEN2) || defined(CONFIG_R8A77980)
++#elif defined(CONFIG_RCAR_GEN2) || defined(CONFIG_R8A77980) || defined(CONFIG_RZA2)
+ 		val = ECMR_RTM;
+ #endif
+ 	} else if (phy->speed == 10) {
+@@ -722,8 +726,11 @@ static int sh_ether_probe(struct udevice *udev)
+ 		goto err_mdio_register;
+ 
+ 	priv->bus = mdiodev;
+-
++#ifdef BASE_IO_ADDR
+ 	port_info->iobase = (void __iomem *)(uintptr_t)BASE_IO_ADDR;
++#else
++	port_info->iobase = (void __iomem *)pdata->iobase;
++#endif
+ 
+ #if CONFIG_IS_ENABLED(CLK)
+ 	ret = clk_enable(&priv->clk);
+@@ -797,6 +804,7 @@ int sh_ether_of_to_plat(struct udevice *dev)
+ 
+ static const struct udevice_id sh_ether_ids[] = {
+ 	{ .compatible = "renesas,ether-r7s72100" },
++	{ .compatible = "renesas,ether-r7s9210" },
+ 	{ .compatible = "renesas,ether-r8a7790" },
+ 	{ .compatible = "renesas,ether-r8a7791" },
+ 	{ .compatible = "renesas,ether-r8a7793" },
+diff --git a/drivers/net/sh_eth.h b/drivers/net/sh_eth.h
+index c395e6e8..2e111284 100644
+--- a/drivers/net/sh_eth.h
++++ b/drivers/net/sh_eth.h
+@@ -339,9 +339,10 @@ static const u16 sh_eth_offset_fast_sh4[SH_ETH_MAX_REGISTER_OFFSET] = {
+ #elif defined(CONFIG_RCAR_GEN2)
+ #define SH_ETH_TYPE_ETHER
+ #define BASE_IO_ADDR	0xEE700200
+-#elif defined(CONFIG_R7S72100)
++#elif defined(CONFIG_RZA1)
++#define SH_ETH_TYPE_RZ
++#elif defined(CONFIG_RZA2)
+ #define SH_ETH_TYPE_RZ
+-#define BASE_IO_ADDR	0xE8203000
+ #elif defined(CONFIG_R8A77980)
+ #define SH_ETH_TYPE_GETHER
+ #define BASE_IO_ADDR	0xE7400000
+@@ -351,7 +352,7 @@ static const u16 sh_eth_offset_fast_sh4[SH_ETH_MAX_REGISTER_OFFSET] = {
+  * Register's bits
+  * Copy from Linux driver source code
+  */
+-#if defined(SH_ETH_TYPE_GETHER) || defined(SH_ETH_TYPE_RZ)
++#if defined(SH_ETH_TYPE_GETHER) || defined(CONFIG_RZA1)
+ /* EDSR */
+ enum EDSR_BIT {
+ 	EDSR_ENT = 0x01, EDSR_ENR = 0x02,
+@@ -363,11 +364,11 @@ enum EDSR_BIT {
+ enum DMAC_M_BIT {
+ 	EDMR_NBST	= 0x80, /* DMA transfer burst mode */
+ 	EDMR_DL1 = 0x20, EDMR_DL0 = 0x10,
+-#if defined(SH_ETH_TYPE_GETHER) || defined(SH_ETH_TYPE_RZ)
++#if defined(SH_ETH_TYPE_GETHER) || defined(CONFIG_RZA1)
+ 	EDMR_SRST	= 0x03, /* Receive/Send reset */
+ 	EMDR_DESC_R	= 0x30, /* Descriptor reserve size */
+ 	EDMR_EL		= 0x40, /* Litte endian */
+-#elif defined(SH_ETH_TYPE_ETHER)
++#elif defined(SH_ETH_TYPE_ETHER) || defined(CONFIG_RZA2)
+ 	EDMR_SRST	= 0x01,
+ 	EMDR_DESC_R	= 0x30, /* Descriptor reserve size */
+ 	EDMR_EL		= 0x40, /* Litte endian */
+@@ -389,7 +390,7 @@ enum DMAC_M_BIT {
+ 
+ /* EDTRR */
+ enum DMAC_T_BIT {
+-#if defined(SH_ETH_TYPE_GETHER) || defined(SH_ETH_TYPE_RZ)
++#if defined(SH_ETH_TYPE_GETHER) || defined(CONFIG_RZA1)
+ 	EDTRR_TRNS = 0x03,
+ #else
+ 	EDTRR_TRNS = 0x01,
+@@ -434,7 +435,7 @@ enum PHY_STATUS_BIT { PHY_ST_LINK = 0x01, };
+ 
+ /* EESR */
+ enum EESR_BIT {
+-#if defined(SH_ETH_TYPE_ETHER)
++#if defined(SH_ETH_TYPE_ETHER) || defined(CONFIG_RZA1)
+ 	EESR_TWB  = 0x40000000,
+ #else
+ 	EESR_TWB  = 0xC0000000,
+@@ -451,7 +452,7 @@ enum EESR_BIT {
+ 	EESR_FTC  = 0x00200000, EESR_TDE  = 0x00100000,
+ 	EESR_TFE  = 0x00080000, EESR_FRC  = 0x00040000,
+ 	EESR_RDE  = 0x00020000, EESR_RFE  = 0x00010000,
+-#if defined(SH_ETH_TYPE_ETHER)
++#if defined(SH_ETH_TYPE_ETHER) || defined(CONFIG_RZA1)
+ 	EESR_CND  = 0x00000800,
+ #endif
+ 	EESR_DLC  = 0x00000400,
+@@ -539,7 +540,7 @@ enum TD_STS_BIT {
+ enum RECV_RST_BIT { RMCR_RST = 0x01, };
+ /* ECMR */
+ enum FELIC_MODE_BIT {
+-#if defined(SH_ETH_TYPE_GETHER) || defined(SH_ETH_TYPE_RZ)
++#if defined(SH_ETH_TYPE_GETHER) || defined(CONFIG_RZA1)
+ 	ECMR_TRCCM = 0x04000000, ECMR_RCSC = 0x00800000,
+ 	ECMR_DPAD = 0x00200000, ECMR_RZPF = 0x00100000,
+ #endif
+@@ -550,16 +551,16 @@ enum FELIC_MODE_BIT {
+ 	ECMR_PRM = 0x00000001,
+ #ifdef CONFIG_CPU_SH7724
+ 	ECMR_RTM = 0x00000010,
+-#elif defined(CONFIG_RCAR_GEN2) || defined (CONFIG_R8A77980)
++#elif defined(CONFIG_RCAR_GEN2) || defined (CONFIG_R8A77980) || defined(CONFIG_RZA2)
+ 	ECMR_RTM = 0x00000004,
+ #endif
+ 
+ };
+ 
+-#if defined(SH_ETH_TYPE_GETHER) || defined(SH_ETH_TYPE_RZ)
++#if defined(SH_ETH_TYPE_GETHER) || defined(CONFIG_RZA1)
+ #define ECMR_CHG_DM (ECMR_TRCCM | ECMR_RZPF | ECMR_ZPF | ECMR_PFR | \
+ 			ECMR_RXF | ECMR_TXF | ECMR_MCT)
+-#elif defined(SH_ETH_TYPE_ETHER)
++#elif defined(SH_ETH_TYPE_ETHER) || defined(CONFIG_RZA2)
+ #define ECMR_CHG_DM (ECMR_ZPF | ECMR_PFR | ECMR_RXF | ECMR_TXF)
+ #else
+ #define ECMR_CHG_DM	(ECMR_ZPF | ECMR_PFR | ECMR_RXF | ECMR_TXF | ECMR_MCT)
+@@ -640,11 +641,11 @@ enum FIFO_SIZE_BIT {
+ static inline unsigned long sh_eth_reg_addr(struct sh_eth_info *port,
+ 					    int enum_index)
+ {
+-#if defined(SH_ETH_TYPE_GETHER) || defined(SH_ETH_TYPE_RZ)
++#if defined(SH_ETH_TYPE_GETHER)
+ 	const u16 *reg_offset = sh_eth_offset_gigabit;
+-#elif defined(SH_ETH_TYPE_ETHER)
++#elif defined(SH_ETH_TYPE_ETHER) || defined(CONFIG_RZA2)
+ 	const u16 *reg_offset = sh_eth_offset_fast_sh4;
+-#elif defined(SH_ETH_TYPE_RZ)
++#elif defined(CONFIG_RZA1)
+ 	const u16 *reg_offset = sh_eth_offset_rz;
+ #else
+ #error
+-- 
+2.34.1
+

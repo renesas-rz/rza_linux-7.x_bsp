@@ -1,0 +1,1262 @@
+From dd11947575ce5c3640ff7cf7fdb50fa02df53f96 Mon Sep 17 00:00:00 2001
+From: Pabitra Adhikari <pabitraadhikari@gmail.com>
+Date: Fri, 30 Oct 2026 20:28:16 +0000
+Subject: [PATCH 06/11] gpu: dave2d: convert line endings from CRLF to LF
+
+No code change. The driver files used Windows line endings; kernel sources use LF.
+
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ drivers/gpu/dave2d/tes_dave.c        | 782 +++++++++++++--------------
+ drivers/gpu/dave2d/tes_dave.h        |  70 +--
+ drivers/gpu/dave2d/tes_dave_irq.c    | 200 +++----
+ drivers/gpu/dave2d/tes_dave_irq.h    |  40 +-
+ drivers/gpu/dave2d/tes_dave_module.h | 126 ++---
+ 5 files changed, 609 insertions(+), 609 deletions(-)
+
+diff --git a/drivers/gpu/dave2d/tes_dave.c b/drivers/gpu/dave2d/tes_dave.c
+index 500f96f8c..91161aef8 100755
+--- a/drivers/gpu/dave2d/tes_dave.c
++++ b/drivers/gpu/dave2d/tes_dave.c
+@@ -1,391 +1,391 @@
+-/****************************************************************************
+- *	License : All rights reserved for TES Electronic Solutions GmbH
+- *			  See included /docs/license.txt for details
+- *	Project : D/AVE 2D
+- *	Purpose : Main linux kernel module. Handles initialization and fops.
+- ****************************************************************************
+- * Version Control Information :
+- *	$Revision: $
+- *	$Date: $
+- *	$LastChangedBy: $
+- ****************************************************************************/
+-
+-#include <linux/init.h>
+-#include <linux/module.h>
+-#include <linux/ioport.h>
+-#include <linux/types.h>
+-#include <linux/kdev_t.h>
+-#include <linux/fs.h>
+-#include <linux/cdev.h>
+-#include <linux/uaccess.h>
+-#include <linux/interrupt.h>
+-#include <linux/spinlock.h>
+-#include <linux/of.h>
+-#include <linux/of_platform.h>
+-#include <linux/of_address.h>
+-#include <linux/of_irq.h>
+-#include <linux/platform_device.h>
+-#include <linux/mm.h>
+-#include <linux/clk.h>
+-#include <asm/io.h>
+-#include <asm/uaccess.h>
+-#include "tes_dave.h"
+-#include "tes_dave_module.h"
+-#include "tes_dave_irq.h"
+-
+-/* store class globally. So far, this module does not fully support multiple
+- * dave instances but still... */
+-struct class *dave_class;
+-
+-/* fops functions */
+-static int dave2d_open(struct inode *ip, struct file *fp)
+-{
+-	struct dave2d_dev *dev;
+-
+-	/* extract the device structure and add it to the file pointer for easier
+-	 * access */
+-	dev = container_of(ip->i_cdev, struct dave2d_dev, cdev);
+-	fp->private_data = dev;
+-
+-	return 0;
+-}
+-
+-static int dave2d_mmap(struct file *fp, struct vm_area_struct *vma)
+-{
+-	struct dave2d_dev *dev = fp->private_data;
+-	pgprot_t prot;
+-	/* none-cached but write combined */
+-	prot = pgprot_writecombine(vma->vm_page_prot);
+-
+-	if (io_remap_pfn_range(vma, vma->vm_start,
+-				dev->mem_base_phys>>PAGE_SHIFT,
+-				vma->vm_end - vma->vm_start,
+-				prot))
+-	{
+-		dev_err(fp->private_data,
+-			"Error while remapping IO memory to userspace\n");
+-		return -EAGAIN;
+-	}
+-
+-	return 0;
+-}
+-
+-static long dave2d_ioctl(struct file *fp, unsigned int cmd, unsigned long arg)
+-{
+-	struct dave2d_dev *dev = fp->private_data;
+-	unsigned int cmd_nr;
+-	dave2d_settings dset;
+-
+-	if (_IOC_TYPE(cmd)!=DAVE2D_IOCTL_TYPE)
+-		return -ENOTTY;
+-
+-	cmd_nr = _IOC_NR(cmd);
+-	if (_IOC_DIR(cmd) == _IOC_WRITE)
+-	{
+-		if (cmd_nr & DAVE2D_IOCTL_REG_PREFIX)
+-		{
+-			/* direct register write: Register value in argument */
+-			DAVE2D_IO_WREG(DAVE2D_IO_RADDR(dev->base_virt,
+-						DAVE2D_IOCTL_GET_REG(cmd_nr)),
+-					arg);
+-			return 0;
+-		}
+-	}
+-	else if (_IOC_DIR(cmd) == _IOC_READ)
+-	{
+-		if(cmd_nr & DAVE2D_IOCTL_REG_PREFIX)
+-		{ /* direct register read: Argument is a pointer */
+-			if(!put_user(DAVE2D_IO_RREG(DAVE2D_IO_RADDR(dev->base_virt,
+-						DAVE2D_IOCTL_GET_REG(cmd_nr))),
+-					(unsigned long*) arg))
+-				return -EFAULT;
+-			return 0;
+-		}
+-
+-		switch(cmd_nr)
+-		{
+-		case DAVE2D_IOCTL_NR_SETTINGS:
+-			dset.base_phys = dev->base_phys;
+-			dset.span = dev->span;
+-			dset.mem_base_phys = dev->mem_base_phys;
+-			dset.mem_span = dev->mem_span;
+-
+-			if(copy_to_user((void*) arg, (void*) &dset,
+-						sizeof(dave2d_settings)))
+-			{
+-				dev_err(fp->private_data,
+-					"error while copying settings to user space\n");
+-				return -EFAULT;
+-			}
+-
+-			break;
+-
+-		default:
+-			return -EINVAL;
+-		}
+-	}
+-	return -EINVAL;
+-}
+-
+-static struct file_operations dave2d_fops = {
+-	.owner = THIS_MODULE,
+-	.open = dave2d_open,
+-	.mmap = dave2d_mmap,
+-	.unlocked_ioctl = dave2d_ioctl,
+-	.read = dave2d_read,
+-};
+-
+-/* create character class and devices */
+-static int dave2d_setup_device(struct dave2d_dev *dev)
+-{
+-	int result = 0;
+-
+-	result = alloc_chrdev_region(&dev->dev, 0, DAVE2D_DEVICE_CNT,
+-			DAVE2D_DEVICE_NAME);
+-
+-	if (result < 0) {
+-		dev_err(dev->device, "can't alloc_chrdev_region\n");
+-		goto CHR_FAILED;
+-	}
+-
+-	dave_class = class_create(DAVE2D_DEVICE_CLASS);
+-	if(!dave_class)
+-	{
+-		dev_err(dev->device, "cannot create class %s\n", DAVE2D_DEVICE_CLASS);
+-		result = -EBUSY;
+-		goto CLASS_FAILED;
+-	}
+-
+-	dev->device = device_create(dave_class, NULL, dev->dev, dev, DAVE2D_DEVICE_NAME);
+-	if(!dev->device)
+-	{
+-		dev_err(dev->device, "cannot create device %s\n", DAVE2D_DEVICE_NAME);
+-		result = -EBUSY;
+-		goto DEVICE_FAILED;
+-	}
+-
+-	cdev_init(&dev->cdev, &dave2d_fops);
+-	dev->cdev.owner = THIS_MODULE;
+-
+-	result = cdev_add(&dev->cdev, dev->dev, DAVE2D_DEVICE_CNT);
+-	if(result)
+-	{
+-		dev_err(dev->device, "can't register char device\n");
+-		goto DEV_FAILED;
+-	}
+-
+-	return 0;
+-
+-DEV_FAILED:
+-	device_destroy(dave_class, dev->dev);
+-DEVICE_FAILED:
+-	class_destroy(dave_class);
+-CLASS_FAILED:
+-	unregister_chrdev_region(dev->dev, DAVE2D_DEVICE_CNT);
+-CHR_FAILED:
+-
+-	return result;
+-}
+-
+-static void dave2d_log_params(struct dave2d_dev *dev)
+-{
+-	dev_info(dev->device, "Base address:\t0x%08lx - 0x%08lx\n",
+-			dev->base_phys, dev->base_phys + dev->span);
+-	dev_info(dev->device, "Video RAM:\t0x%08lx - 0x%08lx\n",
+-			dev->mem_base_phys, dev->mem_base_phys + dev->mem_span);
+-	dev_info(dev->device, "IRQ:\t%d\n", dev->irq_no);
+-}
+-
+-static void dave2d_shutdown_device(struct dave2d_dev *dev)
+-{
+-	device_destroy(dave_class, dev->dev);
+-	class_destroy(dave_class);
+-	unregister_chrdev_region(dev->dev, DAVE2D_DEVICE_CNT);
+-	cdev_del(&dev->cdev);
+-}
+-
+-/* platform device functions:
+- * on probe (new device), copy all neccessary data from device tree description
+- * to local data structure and initialize the driver part.
+- * */
+-static int dave2d_probe(struct platform_device *pdev)
+-{
+-	struct device_node *np;
+-	struct resource rsrc;
+-	const void *ptr;
+-	int len;
+-	int result = 0;
+-	struct dave2d_dev *dave;
+-
+-	dave = devm_kzalloc(&pdev->dev, sizeof(struct dave2d_dev), GFP_KERNEL);
+-	if(!dave)
+-	{
+-		dev_err(&pdev->dev,
+-			"Memory allocation for driver struct failed!\n");
+-		return -ENOMEM;
+-	}
+-	platform_set_drvdata(pdev, dave);
+-	dave->device = &pdev->dev;
+-	np = pdev->dev.of_node;
+-	if(!np)
+-	{
+-		dev_err(&pdev->dev,
+-			"driver should only be instanciated over device tree!\n");
+-		return -ENODEV;
+-	}
+-
+-	of_address_to_resource(np, 0, &rsrc);
+-	dave->base_phys = rsrc.start;
+-	dave->span = rsrc.end - rsrc.start;
+-	dave->irq_no = of_irq_to_resource(np, 0, &rsrc);
+-
+-	ptr = of_get_property(np, "vidmem", &len);
+-	if(!ptr || len != 8)
+-	{
+-		dev_err(&pdev->dev,
+-			"vidmem property in device tree missing or incorrect. Please specify vidmem = < base size >!\n");
+-		return -ENODEV;
+-	}
+-
+-	dave->mem_base_phys = be32_to_cpup(ptr);
+-	dave->mem_span = be32_to_cpup(ptr + 4) - 1;
+-
+-	dave2d_log_params(dave);
+-
+-	spin_lock_init(&dave->irq_slck);
+-	init_waitqueue_head(&dave->irq_waitq);
+-
+-	if (!request_mem_region(dave->base_phys, dave->span, "TES DAVE2D"))
+-	{
+-		dev_err(&pdev->dev, "memory region already in use\n");
+-		return -EBUSY;
+-	}
+-
+-	if (!request_mem_region(dave->mem_base_phys, dave->mem_span,
+-				"DAVE2D Video RAM"))
+-	{
+-		dev_err(&pdev->dev, "video memory region already in use\n");
+-		result = -EBUSY;
+-		goto REQ_VID_FAILED;
+-	}
+-
+-	dave->base_virt = ioremap(dave->base_phys, dave->span);
+-	if (!dave->base_virt)
+-	{
+-		dev_err(&pdev->dev, "ioremap failed\n");
+-		result = -EBUSY;
+-		goto IO_FAILED;
+-	}
+-
+-	dave->mem_base_virt = ioremap(dave->mem_base_phys, dave->mem_span);
+-	if (!dave->mem_base_virt)
+-	{
+-		dev_err(&pdev->dev, "vidmem ioremap failed\n");
+-		result = -EBUSY;
+-		goto IO_VID_FAILED;
+-	}
+-
+-	result = DAVE2D_IO_RREG(DAVE2D_IO_RADDR(dave->base_virt,
+-				DAVE2D_REG_HWREVISION));
+-	if(REG_HWREVISION_TYPE(result) > 1)
+-	{
+-		dev_warn(&pdev->dev,
+-				"Unknown DAVE2D found. Identifier: 0x%08X\n",
+-				result);
+-	}
+-	else
+-	{
+-		dev_info(&pdev->dev, "Found DAVE2D rev. 0x%08X (%s)\n",
+-				REG_HWREVISION_HV(result), REG_HWREVISION_TYPE(result) ?
+-				"D/AVE 2D-TL" : "D/AVE 2D-TS");
+-	}
+-
+-	result = dave2d_setup_device(dave);
+-	if(result)
+-	{
+-		goto DEV_FAILED;
+-	}
+-
+-	/* register dave IRQs */
+-	result = register_irq(dave);
+-	if(result)
+-	{
+-		dev_err(&pdev->dev, "can't register irq %d\n", dave->irq_no);
+-		goto IRQ_FAILED;
+-	}
+-
+-	dave->clk = devm_clk_get(&pdev->dev, NULL);
+-	if (IS_ERR(dave->clk)) {
+-		dev_err(&pdev->dev, "can't get clock\n");
+-		goto DEV_FAILED;
+-	}
+-	clk_prepare_enable(dave->clk);
+-
+-	return 0;
+-
+-IRQ_FAILED:
+-	dave2d_shutdown_device(dave);
+-DEV_FAILED:
+-	iounmap(dave->mem_base_virt);
+-IO_VID_FAILED:
+-	iounmap(dave->base_virt);
+-IO_FAILED:
+-	release_mem_region(dave->mem_base_phys, dave->mem_span);
+-REQ_VID_FAILED:
+-	release_mem_region(dave->base_phys, dave->span);
+-
+-	return -EBUSY;
+-}
+-
+-static void dave2d_remove(struct platform_device *pdev)
+-{
+-	struct dave2d_dev *dave = platform_get_drvdata(pdev);
+-	unregister_irq(dave);
+-	iounmap(dave->mem_base_virt);
+-	iounmap(dave->base_virt);
+-	release_mem_region(dave->base_phys, dave->span);
+-	release_mem_region(dave->mem_base_phys, dave->mem_span);
+-	dave2d_shutdown_device(dave);
+-	devm_kfree(&pdev->dev, dave);
+-}
+-
+-static const struct of_device_id dave2d_of_ids[] = {
+-	{
+-		.compatible = DAVE2D_OF_COMPATIBLE,
+-	},
+-	{ }
+-};
+-
+-static struct platform_driver dave2d_driver = {
+-	.driver = {
+-		.name = DAVE2D_DEVICE_NAME,
+-		.owner = THIS_MODULE,
+-		.of_match_table = of_match_ptr(dave2d_of_ids),
+-	},
+-	.probe = dave2d_probe,
+-	.remove = dave2d_remove,
+-};
+-
+-static int __init dave2d_init(void)
+-{
+-	int result = 0;
+-
+-	result = platform_driver_register(&dave2d_driver);
+-	if(result)
+-		printk(KERN_ALERT "%s: failed to register platform driver\n", __func__);
+-
+-	return result;
+-
+-}
+-
+-static void __exit dave2d_exit(void)
+-{
+-	platform_driver_unregister(&dave2d_driver);
+-}
+-
+-module_init(dave2d_init);
+-module_exit(dave2d_exit);
+-MODULE_AUTHOR("TES Electronic Solutions GmbH - Christian Thaler");
+-MODULE_DESCRIPTION("Kernel driver for DAVE2D renderer.");
+-MODULE_LICENSE("Dual BSD/GPL");
+-MODULE_DEVICE_TABLE(of, dave2d_of_ids);
++/****************************************************************************
++ *	License : All rights reserved for TES Electronic Solutions GmbH
++ *			  See included /docs/license.txt for details
++ *	Project : D/AVE 2D
++ *	Purpose : Main linux kernel module. Handles initialization and fops.
++ ****************************************************************************
++ * Version Control Information :
++ *	$Revision: $
++ *	$Date: $
++ *	$LastChangedBy: $
++ ****************************************************************************/
++
++#include <linux/init.h>
++#include <linux/module.h>
++#include <linux/ioport.h>
++#include <linux/types.h>
++#include <linux/kdev_t.h>
++#include <linux/fs.h>
++#include <linux/cdev.h>
++#include <linux/uaccess.h>
++#include <linux/interrupt.h>
++#include <linux/spinlock.h>
++#include <linux/of.h>
++#include <linux/of_platform.h>
++#include <linux/of_address.h>
++#include <linux/of_irq.h>
++#include <linux/platform_device.h>
++#include <linux/mm.h>
++#include <linux/clk.h>
++#include <asm/io.h>
++#include <asm/uaccess.h>
++#include "tes_dave.h"
++#include "tes_dave_module.h"
++#include "tes_dave_irq.h"
++
++/* store class globally. So far, this module does not fully support multiple
++ * dave instances but still... */
++struct class *dave_class;
++
++/* fops functions */
++static int dave2d_open(struct inode *ip, struct file *fp)
++{
++	struct dave2d_dev *dev;
++
++	/* extract the device structure and add it to the file pointer for easier
++	 * access */
++	dev = container_of(ip->i_cdev, struct dave2d_dev, cdev);
++	fp->private_data = dev;
++
++	return 0;
++}
++
++static int dave2d_mmap(struct file *fp, struct vm_area_struct *vma)
++{
++	struct dave2d_dev *dev = fp->private_data;
++	pgprot_t prot;
++	/* none-cached but write combined */
++	prot = pgprot_writecombine(vma->vm_page_prot);
++
++	if (io_remap_pfn_range(vma, vma->vm_start,
++				dev->mem_base_phys>>PAGE_SHIFT,
++				vma->vm_end - vma->vm_start,
++				prot))
++	{
++		dev_err(fp->private_data,
++			"Error while remapping IO memory to userspace\n");
++		return -EAGAIN;
++	}
++
++	return 0;
++}
++
++static long dave2d_ioctl(struct file *fp, unsigned int cmd, unsigned long arg)
++{
++	struct dave2d_dev *dev = fp->private_data;
++	unsigned int cmd_nr;
++	dave2d_settings dset;
++
++	if (_IOC_TYPE(cmd)!=DAVE2D_IOCTL_TYPE)
++		return -ENOTTY;
++
++	cmd_nr = _IOC_NR(cmd);
++	if (_IOC_DIR(cmd) == _IOC_WRITE)
++	{
++		if (cmd_nr & DAVE2D_IOCTL_REG_PREFIX)
++		{
++			/* direct register write: Register value in argument */
++			DAVE2D_IO_WREG(DAVE2D_IO_RADDR(dev->base_virt,
++						DAVE2D_IOCTL_GET_REG(cmd_nr)),
++					arg);
++			return 0;
++		}
++	}
++	else if (_IOC_DIR(cmd) == _IOC_READ)
++	{
++		if(cmd_nr & DAVE2D_IOCTL_REG_PREFIX)
++		{ /* direct register read: Argument is a pointer */
++			if(!put_user(DAVE2D_IO_RREG(DAVE2D_IO_RADDR(dev->base_virt,
++						DAVE2D_IOCTL_GET_REG(cmd_nr))),
++					(unsigned long*) arg))
++				return -EFAULT;
++			return 0;
++		}
++
++		switch(cmd_nr)
++		{
++		case DAVE2D_IOCTL_NR_SETTINGS:
++			dset.base_phys = dev->base_phys;
++			dset.span = dev->span;
++			dset.mem_base_phys = dev->mem_base_phys;
++			dset.mem_span = dev->mem_span;
++
++			if(copy_to_user((void*) arg, (void*) &dset,
++						sizeof(dave2d_settings)))
++			{
++				dev_err(fp->private_data,
++					"error while copying settings to user space\n");
++				return -EFAULT;
++			}
++
++			break;
++
++		default:
++			return -EINVAL;
++		}
++	}
++	return -EINVAL;
++}
++
++static struct file_operations dave2d_fops = {
++	.owner = THIS_MODULE,
++	.open = dave2d_open,
++	.mmap = dave2d_mmap,
++	.unlocked_ioctl = dave2d_ioctl,
++	.read = dave2d_read,
++};
++
++/* create character class and devices */
++static int dave2d_setup_device(struct dave2d_dev *dev)
++{
++	int result = 0;
++
++	result = alloc_chrdev_region(&dev->dev, 0, DAVE2D_DEVICE_CNT,
++			DAVE2D_DEVICE_NAME);
++
++	if (result < 0) {
++		dev_err(dev->device, "can't alloc_chrdev_region\n");
++		goto CHR_FAILED;
++	}
++
++	dave_class = class_create(DAVE2D_DEVICE_CLASS);
++	if(!dave_class)
++	{
++		dev_err(dev->device, "cannot create class %s\n", DAVE2D_DEVICE_CLASS);
++		result = -EBUSY;
++		goto CLASS_FAILED;
++	}
++
++	dev->device = device_create(dave_class, NULL, dev->dev, dev, DAVE2D_DEVICE_NAME);
++	if(!dev->device)
++	{
++		dev_err(dev->device, "cannot create device %s\n", DAVE2D_DEVICE_NAME);
++		result = -EBUSY;
++		goto DEVICE_FAILED;
++	}
++
++	cdev_init(&dev->cdev, &dave2d_fops);
++	dev->cdev.owner = THIS_MODULE;
++
++	result = cdev_add(&dev->cdev, dev->dev, DAVE2D_DEVICE_CNT);
++	if(result)
++	{
++		dev_err(dev->device, "can't register char device\n");
++		goto DEV_FAILED;
++	}
++
++	return 0;
++
++DEV_FAILED:
++	device_destroy(dave_class, dev->dev);
++DEVICE_FAILED:
++	class_destroy(dave_class);
++CLASS_FAILED:
++	unregister_chrdev_region(dev->dev, DAVE2D_DEVICE_CNT);
++CHR_FAILED:
++
++	return result;
++}
++
++static void dave2d_log_params(struct dave2d_dev *dev)
++{
++	dev_info(dev->device, "Base address:\t0x%08lx - 0x%08lx\n",
++			dev->base_phys, dev->base_phys + dev->span);
++	dev_info(dev->device, "Video RAM:\t0x%08lx - 0x%08lx\n",
++			dev->mem_base_phys, dev->mem_base_phys + dev->mem_span);
++	dev_info(dev->device, "IRQ:\t%d\n", dev->irq_no);
++}
++
++static void dave2d_shutdown_device(struct dave2d_dev *dev)
++{
++	device_destroy(dave_class, dev->dev);
++	class_destroy(dave_class);
++	unregister_chrdev_region(dev->dev, DAVE2D_DEVICE_CNT);
++	cdev_del(&dev->cdev);
++}
++
++/* platform device functions:
++ * on probe (new device), copy all neccessary data from device tree description
++ * to local data structure and initialize the driver part.
++ * */
++static int dave2d_probe(struct platform_device *pdev)
++{
++	struct device_node *np;
++	struct resource rsrc;
++	const void *ptr;
++	int len;
++	int result = 0;
++	struct dave2d_dev *dave;
++
++	dave = devm_kzalloc(&pdev->dev, sizeof(struct dave2d_dev), GFP_KERNEL);
++	if(!dave)
++	{
++		dev_err(&pdev->dev,
++			"Memory allocation for driver struct failed!\n");
++		return -ENOMEM;
++	}
++	platform_set_drvdata(pdev, dave);
++	dave->device = &pdev->dev;
++	np = pdev->dev.of_node;
++	if(!np)
++	{
++		dev_err(&pdev->dev,
++			"driver should only be instanciated over device tree!\n");
++		return -ENODEV;
++	}
++
++	of_address_to_resource(np, 0, &rsrc);
++	dave->base_phys = rsrc.start;
++	dave->span = rsrc.end - rsrc.start;
++	dave->irq_no = of_irq_to_resource(np, 0, &rsrc);
++
++	ptr = of_get_property(np, "vidmem", &len);
++	if(!ptr || len != 8)
++	{
++		dev_err(&pdev->dev,
++			"vidmem property in device tree missing or incorrect. Please specify vidmem = < base size >!\n");
++		return -ENODEV;
++	}
++
++	dave->mem_base_phys = be32_to_cpup(ptr);
++	dave->mem_span = be32_to_cpup(ptr + 4) - 1;
++
++	dave2d_log_params(dave);
++
++	spin_lock_init(&dave->irq_slck);
++	init_waitqueue_head(&dave->irq_waitq);
++
++	if (!request_mem_region(dave->base_phys, dave->span, "TES DAVE2D"))
++	{
++		dev_err(&pdev->dev, "memory region already in use\n");
++		return -EBUSY;
++	}
++
++	if (!request_mem_region(dave->mem_base_phys, dave->mem_span,
++				"DAVE2D Video RAM"))
++	{
++		dev_err(&pdev->dev, "video memory region already in use\n");
++		result = -EBUSY;
++		goto REQ_VID_FAILED;
++	}
++
++	dave->base_virt = ioremap(dave->base_phys, dave->span);
++	if (!dave->base_virt)
++	{
++		dev_err(&pdev->dev, "ioremap failed\n");
++		result = -EBUSY;
++		goto IO_FAILED;
++	}
++
++	dave->mem_base_virt = ioremap(dave->mem_base_phys, dave->mem_span);
++	if (!dave->mem_base_virt)
++	{
++		dev_err(&pdev->dev, "vidmem ioremap failed\n");
++		result = -EBUSY;
++		goto IO_VID_FAILED;
++	}
++
++	result = DAVE2D_IO_RREG(DAVE2D_IO_RADDR(dave->base_virt,
++				DAVE2D_REG_HWREVISION));
++	if(REG_HWREVISION_TYPE(result) > 1)
++	{
++		dev_warn(&pdev->dev,
++				"Unknown DAVE2D found. Identifier: 0x%08X\n",
++				result);
++	}
++	else
++	{
++		dev_info(&pdev->dev, "Found DAVE2D rev. 0x%08X (%s)\n",
++				REG_HWREVISION_HV(result), REG_HWREVISION_TYPE(result) ?
++				"D/AVE 2D-TL" : "D/AVE 2D-TS");
++	}
++
++	result = dave2d_setup_device(dave);
++	if(result)
++	{
++		goto DEV_FAILED;
++	}
++
++	/* register dave IRQs */
++	result = register_irq(dave);
++	if(result)
++	{
++		dev_err(&pdev->dev, "can't register irq %d\n", dave->irq_no);
++		goto IRQ_FAILED;
++	}
++
++	dave->clk = devm_clk_get(&pdev->dev, NULL);
++	if (IS_ERR(dave->clk)) {
++		dev_err(&pdev->dev, "can't get clock\n");
++		goto DEV_FAILED;
++	}
++	clk_prepare_enable(dave->clk);
++
++	return 0;
++
++IRQ_FAILED:
++	dave2d_shutdown_device(dave);
++DEV_FAILED:
++	iounmap(dave->mem_base_virt);
++IO_VID_FAILED:
++	iounmap(dave->base_virt);
++IO_FAILED:
++	release_mem_region(dave->mem_base_phys, dave->mem_span);
++REQ_VID_FAILED:
++	release_mem_region(dave->base_phys, dave->span);
++
++	return -EBUSY;
++}
++
++static void dave2d_remove(struct platform_device *pdev)
++{
++	struct dave2d_dev *dave = platform_get_drvdata(pdev);
++	unregister_irq(dave);
++	iounmap(dave->mem_base_virt);
++	iounmap(dave->base_virt);
++	release_mem_region(dave->base_phys, dave->span);
++	release_mem_region(dave->mem_base_phys, dave->mem_span);
++	dave2d_shutdown_device(dave);
++	devm_kfree(&pdev->dev, dave);
++}
++
++static const struct of_device_id dave2d_of_ids[] = {
++	{
++		.compatible = DAVE2D_OF_COMPATIBLE,
++	},
++	{ }
++};
++
++static struct platform_driver dave2d_driver = {
++	.driver = {
++		.name = DAVE2D_DEVICE_NAME,
++		.owner = THIS_MODULE,
++		.of_match_table = of_match_ptr(dave2d_of_ids),
++	},
++	.probe = dave2d_probe,
++	.remove = dave2d_remove,
++};
++
++static int __init dave2d_init(void)
++{
++	int result = 0;
++
++	result = platform_driver_register(&dave2d_driver);
++	if(result)
++		printk(KERN_ALERT "%s: failed to register platform driver\n", __func__);
++
++	return result;
++
++}
++
++static void __exit dave2d_exit(void)
++{
++	platform_driver_unregister(&dave2d_driver);
++}
++
++module_init(dave2d_init);
++module_exit(dave2d_exit);
++MODULE_AUTHOR("TES Electronic Solutions GmbH - Christian Thaler");
++MODULE_DESCRIPTION("Kernel driver for DAVE2D renderer.");
++MODULE_LICENSE("Dual BSD/GPL");
++MODULE_DEVICE_TABLE(of, dave2d_of_ids);
+diff --git a/drivers/gpu/dave2d/tes_dave.h b/drivers/gpu/dave2d/tes_dave.h
+index 6a55c4771..05b792684 100755
+--- a/drivers/gpu/dave2d/tes_dave.h
++++ b/drivers/gpu/dave2d/tes_dave.h
+@@ -1,35 +1,35 @@
+-/****************************************************************************
+- *  License : All rights reserved for TES Electronic Solutions GmbH
+- *	      See included /docs/license.txt for details
+- *  Project : D/AVE 2D
+- *  Purpose : Public definitions of the kernel module
+- ****************************************************************************
+- * Version Control Information :
+- *  $Revision: $
+- *  $Date: $
+- *  $LastChangedBy: $
+- ****************************************************************************/
+-
+-#ifndef __TES_DAVE_H__
+-#define __TES_DAVE_H__
+-
+-/* IOCTL Commands */
+-#define DAVE2D_IOCTL_TYPE 'D'
+-#define DAVE2D_IOCTL_REG_PREFIX		(0x80)
+-#define DAVE2D_IOCTL_NR_SETTINGS	(0x01)
+-#define DAVE2D_IOCTL_MAKE_REG(reg) (reg|DAVE2D_IOCTL_REG_PREFIX)
+-#define DAVE2D_IOCTL_GET_REG(nr) (nr&(~DAVE2D_IOCTL_REG_PREFIX))
+-#define DAVE2D_IOCTL_WREG(reg) (_IOW(DAVE2D_IOCTL_TYPE,DAVE2D_IOCTL_MAKE_REG(reg),unsigned long))
+-#define DAVE2D_IOCTL_RREG(reg) (_IOR(DAVE2D_IOCTL_TYPE,DAVE2D_IOCTL_MAKE_REG(reg),unsigned long))
+-#define DAVE2D_IOCTL_GET_SETTINGS (_IOR(DAVE2D_IOCTL_TYPE,DAVE2D_IOCTL_NR_SETTINGS,dave2d_settings))
+-
+-/* DAVE2D physical memory layout */
+-typedef struct
+-{
+-	unsigned long base_phys; /* base start address */
+-	unsigned long span; /* last base offset */
+-	unsigned long mem_base_phys; /* video memory start address */
+-	unsigned long mem_span; /* last video memory cell offset */
+-} dave2d_settings;
+-
+-#endif
++/****************************************************************************
++ *  License : All rights reserved for TES Electronic Solutions GmbH
++ *	      See included /docs/license.txt for details
++ *  Project : D/AVE 2D
++ *  Purpose : Public definitions of the kernel module
++ ****************************************************************************
++ * Version Control Information :
++ *  $Revision: $
++ *  $Date: $
++ *  $LastChangedBy: $
++ ****************************************************************************/
++
++#ifndef __TES_DAVE_H__
++#define __TES_DAVE_H__
++
++/* IOCTL Commands */
++#define DAVE2D_IOCTL_TYPE 'D'
++#define DAVE2D_IOCTL_REG_PREFIX		(0x80)
++#define DAVE2D_IOCTL_NR_SETTINGS	(0x01)
++#define DAVE2D_IOCTL_MAKE_REG(reg) (reg|DAVE2D_IOCTL_REG_PREFIX)
++#define DAVE2D_IOCTL_GET_REG(nr) (nr&(~DAVE2D_IOCTL_REG_PREFIX))
++#define DAVE2D_IOCTL_WREG(reg) (_IOW(DAVE2D_IOCTL_TYPE,DAVE2D_IOCTL_MAKE_REG(reg),unsigned long))
++#define DAVE2D_IOCTL_RREG(reg) (_IOR(DAVE2D_IOCTL_TYPE,DAVE2D_IOCTL_MAKE_REG(reg),unsigned long))
++#define DAVE2D_IOCTL_GET_SETTINGS (_IOR(DAVE2D_IOCTL_TYPE,DAVE2D_IOCTL_NR_SETTINGS,dave2d_settings))
++
++/* DAVE2D physical memory layout */
++typedef struct
++{
++	unsigned long base_phys; /* base start address */
++	unsigned long span; /* last base offset */
++	unsigned long mem_base_phys; /* video memory start address */
++	unsigned long mem_span; /* last video memory cell offset */
++} dave2d_settings;
++
++#endif
+diff --git a/drivers/gpu/dave2d/tes_dave_irq.c b/drivers/gpu/dave2d/tes_dave_irq.c
+index 7c08ff8c3..88c41bd06 100755
+--- a/drivers/gpu/dave2d/tes_dave_irq.c
++++ b/drivers/gpu/dave2d/tes_dave_irq.c
+@@ -1,100 +1,100 @@
+-/****************************************************************************
+- *  License : All rights reserved for TES Electronic Solutions GmbH
+- *	      See included /docs/license.txt for details
+- *  Project : D/AVE 2D
+- *  Purpose : Interrupt handling for kernel driver. Userspace signalling 
+- *	      by blocking reads.
+- ****************************************************************************
+- * Version Control Information :
+- *  $Revision: $
+- *  $Date: $
+- *  $LastChangedBy: $
+- ****************************************************************************/
+-
+-#include <linux/fs.h>
+-#include <linux/interrupt.h>
+-#include <linux/wait.h>
+-#include <linux/sched.h>
+-#include <linux/uaccess.h>
+-#include <linux/spinlock.h>
+-#include <asm/io.h>
+-#include "tes_dave.h"
+-#include "tes_dave_module.h"
+-#include "tes_dave_irq.h"
+-
+-/* Basic IRQ implementation, handles only DLIST IRQ so far as the official
+- * driver does not use others.
+- */
+-irqreturn_t std_irq_handler(int irq, void *dev_id)
+-{
+-	struct dave2d_dev *dev = dev_id;
+-	unsigned long flags;
+-	unsigned int sreg;
+-
+-	sreg = DAVE2D_IO_RREG(DAVE2D_IO_RADDR(dev->base_virt, DAVE2D_REG_STATUS))
+-		& (DAVE2D_REG_STATUS_IRQ_DLIST | DAVE2D_REG_STATUS_IRQ_ENUM);
+-
+-	if(!(sreg & DAVE2D_REG_STATUS_IRQ_DLIST))
+-	{
+-		dev_err(dev->device, "Spurious IRQ: IRQ_DLIST not set!\n");
+-	}
+-	else { 
+-		/* clear and leave enabled */
+-		DAVE2D_IO_WREG(DAVE2D_IO_RADDR(dev->base_virt, DAVE2D_REG_IRQCTL),
+-			DAVE2D_REG_IRQCTL_ENABLE_DLIST_IRQ |
+-			DAVE2D_REG_IRQCTL_CLR_DLIST_IRQ);
+-
+-		spin_lock_irqsave(&dev->irq_slck, flags);
+-		dev->irq_stat = sreg;
+-		spin_unlock_irqrestore(&dev->irq_slck, flags);
+-
+-		/* notify userspace driver by unblocking read */
+-		wake_up_interruptible(&dev->irq_waitq);
+-	}
+-	return IRQ_HANDLED;
+-}
+-
+-int register_irq(struct dave2d_dev *dev)
+-{
+-	if(request_irq(dev->irq_no, std_irq_handler, 0, "TES DAVE2D", (void*) dev))
+-	{
+-		dev_err(dev->device, "irq cannot be registered\n");
+-		return -EBUSY;
+-	}
+-
+-	DAVE2D_IO_WREG(DAVE2D_IO_RADDR(dev->base_virt, DAVE2D_REG_IRQCTL),
+-			DAVE2D_REG_IRQCTL_ENABLE_DLIST_IRQ);
+-
+-	return 0;
+-}
+-
+-void unregister_irq(struct dave2d_dev *dev)
+-{
+-	/* disable/clear IRQs first */
+-	DAVE2D_IO_WREG(DAVE2D_IO_RADDR(dev->base_virt, DAVE2D_REG_IRQCTL),
+-			DAVE2D_REG_IRQCTL_CLR_DLIST_IRQ);
+-
+-	free_irq(dev->irq_no, (void*) dev);
+-}
+-
+-ssize_t dave2d_read(struct file *fp, char __user *buff, size_t count, loff_t *offp)
+-{
+-	struct dave2d_dev *dev = fp->private_data;
+-	unsigned long flags;
+-	int temp;
+-
+-	wait_event_interruptible(dev->irq_waitq, dev->irq_stat);
+-
+-	spin_lock_irqsave(&dev->irq_slck, flags);
+-	temp = dev->irq_stat;
+-	dev->irq_stat = 0;
+-	spin_unlock_irqrestore(&dev->irq_slck, flags);
+-
+-	if(count==sizeof(temp))
+-	{
+-		put_user(temp, buff);
+-		return sizeof(temp);
+-	}
+-
+-	return 0;
+-}
++/****************************************************************************
++ *  License : All rights reserved for TES Electronic Solutions GmbH
++ *	      See included /docs/license.txt for details
++ *  Project : D/AVE 2D
++ *  Purpose : Interrupt handling for kernel driver. Userspace signalling 
++ *	      by blocking reads.
++ ****************************************************************************
++ * Version Control Information :
++ *  $Revision: $
++ *  $Date: $
++ *  $LastChangedBy: $
++ ****************************************************************************/
++
++#include <linux/fs.h>
++#include <linux/interrupt.h>
++#include <linux/wait.h>
++#include <linux/sched.h>
++#include <linux/uaccess.h>
++#include <linux/spinlock.h>
++#include <asm/io.h>
++#include "tes_dave.h"
++#include "tes_dave_module.h"
++#include "tes_dave_irq.h"
++
++/* Basic IRQ implementation, handles only DLIST IRQ so far as the official
++ * driver does not use others.
++ */
++irqreturn_t std_irq_handler(int irq, void *dev_id)
++{
++	struct dave2d_dev *dev = dev_id;
++	unsigned long flags;
++	unsigned int sreg;
++
++	sreg = DAVE2D_IO_RREG(DAVE2D_IO_RADDR(dev->base_virt, DAVE2D_REG_STATUS))
++		& (DAVE2D_REG_STATUS_IRQ_DLIST | DAVE2D_REG_STATUS_IRQ_ENUM);
++
++	if(!(sreg & DAVE2D_REG_STATUS_IRQ_DLIST))
++	{
++		dev_err(dev->device, "Spurious IRQ: IRQ_DLIST not set!\n");
++	}
++	else { 
++		/* clear and leave enabled */
++		DAVE2D_IO_WREG(DAVE2D_IO_RADDR(dev->base_virt, DAVE2D_REG_IRQCTL),
++			DAVE2D_REG_IRQCTL_ENABLE_DLIST_IRQ |
++			DAVE2D_REG_IRQCTL_CLR_DLIST_IRQ);
++
++		spin_lock_irqsave(&dev->irq_slck, flags);
++		dev->irq_stat = sreg;
++		spin_unlock_irqrestore(&dev->irq_slck, flags);
++
++		/* notify userspace driver by unblocking read */
++		wake_up_interruptible(&dev->irq_waitq);
++	}
++	return IRQ_HANDLED;
++}
++
++int register_irq(struct dave2d_dev *dev)
++{
++	if(request_irq(dev->irq_no, std_irq_handler, 0, "TES DAVE2D", (void*) dev))
++	{
++		dev_err(dev->device, "irq cannot be registered\n");
++		return -EBUSY;
++	}
++
++	DAVE2D_IO_WREG(DAVE2D_IO_RADDR(dev->base_virt, DAVE2D_REG_IRQCTL),
++			DAVE2D_REG_IRQCTL_ENABLE_DLIST_IRQ);
++
++	return 0;
++}
++
++void unregister_irq(struct dave2d_dev *dev)
++{
++	/* disable/clear IRQs first */
++	DAVE2D_IO_WREG(DAVE2D_IO_RADDR(dev->base_virt, DAVE2D_REG_IRQCTL),
++			DAVE2D_REG_IRQCTL_CLR_DLIST_IRQ);
++
++	free_irq(dev->irq_no, (void*) dev);
++}
++
++ssize_t dave2d_read(struct file *fp, char __user *buff, size_t count, loff_t *offp)
++{
++	struct dave2d_dev *dev = fp->private_data;
++	unsigned long flags;
++	int temp;
++
++	wait_event_interruptible(dev->irq_waitq, dev->irq_stat);
++
++	spin_lock_irqsave(&dev->irq_slck, flags);
++	temp = dev->irq_stat;
++	dev->irq_stat = 0;
++	spin_unlock_irqrestore(&dev->irq_slck, flags);
++
++	if(count==sizeof(temp))
++	{
++		put_user(temp, buff);
++		return sizeof(temp);
++	}
++
++	return 0;
++}
+diff --git a/drivers/gpu/dave2d/tes_dave_irq.h b/drivers/gpu/dave2d/tes_dave_irq.h
+index efef14349..04abb980b 100755
+--- a/drivers/gpu/dave2d/tes_dave_irq.h
++++ b/drivers/gpu/dave2d/tes_dave_irq.h
+@@ -1,20 +1,20 @@
+-/****************************************************************************
+- *  License : All rights reserved for TES Electronic Solutions GmbH
+- *            See included /docs/license.txt for details
+- *  Project : D/AVE 2D
+- *  Purpose : 
+- ****************************************************************************
+- * Version Control Information :
+- *  $Revision: $
+- *  $Date: $
+- *  $LastChangedBy: $
+- ****************************************************************************/
+-
+-#ifndef TES_DAVE_IRQ_H_
+-#define TES_DAVE_IRQ_H_
+-
+-int register_irq(struct dave2d_dev *dave);
+-void unregister_irq(struct dave2d_dev *dave);
+-ssize_t dave2d_read(struct file *filp, char __user *buff, size_t count, loff_t *offp);
+-
+-#endif /* TES_DAVE_IRQ_H_ */
++/****************************************************************************
++ *  License : All rights reserved for TES Electronic Solutions GmbH
++ *            See included /docs/license.txt for details
++ *  Project : D/AVE 2D
++ *  Purpose : 
++ ****************************************************************************
++ * Version Control Information :
++ *  $Revision: $
++ *  $Date: $
++ *  $LastChangedBy: $
++ ****************************************************************************/
++
++#ifndef TES_DAVE_IRQ_H_
++#define TES_DAVE_IRQ_H_
++
++int register_irq(struct dave2d_dev *dave);
++void unregister_irq(struct dave2d_dev *dave);
++ssize_t dave2d_read(struct file *filp, char __user *buff, size_t count, loff_t *offp);
++
++#endif /* TES_DAVE_IRQ_H_ */
+diff --git a/drivers/gpu/dave2d/tes_dave_module.h b/drivers/gpu/dave2d/tes_dave_module.h
+index ff25de8b6..06643c2ea 100755
+--- a/drivers/gpu/dave2d/tes_dave_module.h
++++ b/drivers/gpu/dave2d/tes_dave_module.h
+@@ -1,63 +1,63 @@
+-/****************************************************************************
+- *  License : All rights reserved for TES Electronic Solutions GmbH
+- *	      See included /docs/license.txt for details
+- *  Project : D/AVE 2D
+- *  Purpose : Device and module specific defines
+- ****************************************************************************
+- * Version Control Information :
+- *  $Revision: $
+- *  $Date: $
+- *  $LastChangedBy: $
+- ****************************************************************************/
+-
+-#ifndef TES_DAVE_MODULE_H_
+-#define TES_DAVE_MODULE_H_
+-#include <linux/cdev.h>
+-#include <linux/device.h>
+-
+-/* Character device settings */
+-#define DAVE2D_DEVICE_NAME		    "dave2d"
+-#define DAVE2D_DEVICE_CLASS		    "dave2d"
+-#define DAVE2D_DEVICE_CNT		    1
+-
+-/* Device Tree Identifiers */
+-#define DAVE2D_OF_TYPE			    "renderer"
+-#define DAVE2D_OF_COMPATIBLE		    "tes,dave2d-1.0"
+-
+-/* DAVE2D register mappings needed by this driver */
+-#define DAVE2D_REG_CONTROL1		    (0)
+-#define DAVE2D_REG_STATUS		    0
+-#define DAVE2D_REG_IRQCTL		    (48)
+-#define DAVE2D_REG_HWREVISION		    1
+-#define REG_HWREVISION_HV(hwr)		    (hwr & ((1 << 12) - 1))
+-#define REG_HWREVISION_TYPE(hwr)	    (hwr >> 12 & ((1 << 4) - 1))
+-#define DAVE2D_REG_STATUS_IRQ_DLIST	    (0x20)
+-#define DAVE2D_REG_STATUS_IRQ_ENUM	    (0x10)
+-#define DAVE2D_REG_IRQCTL_ENABLE_DLIST_IRQ  (0x02)
+-#define DAVE2D_REG_IRQCTL_CLR_DLIST_IRQ     (0x08)
+-
+-/* Register access macros */
+-#define DAVE2D_IO_WREG(addr,data)	    iowrite32(data,addr)
+-#define DAVE2D_IO_RREG(addr)		    ioread32(addr)
+-#define DAVE2D_IO_RADDR(base,reg)	    ((void*)((unsigned long)base|((unsigned long)reg)<<2))
+-
+-/* DAVE2D device info struct */
+-struct dave2d_dev
+-{
+-	unsigned long base_phys;
+-	unsigned long span;
+-	unsigned long mem_base_phys;
+-	unsigned long mem_span;
+-	void *base_virt;
+-	void *mem_base_virt;
+-	unsigned int irq_no;
+-	unsigned int irq_stat;
+-	spinlock_t irq_slck;
+-	wait_queue_head_t irq_waitq;
+-	dev_t dev;
+-	struct cdev cdev;
+-	struct device *device;
+-	struct clk *clk;
+-};
+-
+-#endif /* TES_DAVE_MODULE_H_ */
++/****************************************************************************
++ *  License : All rights reserved for TES Electronic Solutions GmbH
++ *	      See included /docs/license.txt for details
++ *  Project : D/AVE 2D
++ *  Purpose : Device and module specific defines
++ ****************************************************************************
++ * Version Control Information :
++ *  $Revision: $
++ *  $Date: $
++ *  $LastChangedBy: $
++ ****************************************************************************/
++
++#ifndef TES_DAVE_MODULE_H_
++#define TES_DAVE_MODULE_H_
++#include <linux/cdev.h>
++#include <linux/device.h>
++
++/* Character device settings */
++#define DAVE2D_DEVICE_NAME		    "dave2d"
++#define DAVE2D_DEVICE_CLASS		    "dave2d"
++#define DAVE2D_DEVICE_CNT		    1
++
++/* Device Tree Identifiers */
++#define DAVE2D_OF_TYPE			    "renderer"
++#define DAVE2D_OF_COMPATIBLE		    "tes,dave2d-1.0"
++
++/* DAVE2D register mappings needed by this driver */
++#define DAVE2D_REG_CONTROL1		    (0)
++#define DAVE2D_REG_STATUS		    0
++#define DAVE2D_REG_IRQCTL		    (48)
++#define DAVE2D_REG_HWREVISION		    1
++#define REG_HWREVISION_HV(hwr)		    (hwr & ((1 << 12) - 1))
++#define REG_HWREVISION_TYPE(hwr)	    (hwr >> 12 & ((1 << 4) - 1))
++#define DAVE2D_REG_STATUS_IRQ_DLIST	    (0x20)
++#define DAVE2D_REG_STATUS_IRQ_ENUM	    (0x10)
++#define DAVE2D_REG_IRQCTL_ENABLE_DLIST_IRQ  (0x02)
++#define DAVE2D_REG_IRQCTL_CLR_DLIST_IRQ     (0x08)
++
++/* Register access macros */
++#define DAVE2D_IO_WREG(addr,data)	    iowrite32(data,addr)
++#define DAVE2D_IO_RREG(addr)		    ioread32(addr)
++#define DAVE2D_IO_RADDR(base,reg)	    ((void*)((unsigned long)base|((unsigned long)reg)<<2))
++
++/* DAVE2D device info struct */
++struct dave2d_dev
++{
++	unsigned long base_phys;
++	unsigned long span;
++	unsigned long mem_base_phys;
++	unsigned long mem_span;
++	void *base_virt;
++	void *mem_base_virt;
++	unsigned int irq_no;
++	unsigned int irq_stat;
++	spinlock_t irq_slck;
++	wait_queue_head_t irq_waitq;
++	dev_t dev;
++	struct cdev cdev;
++	struct device *device;
++	struct clk *clk;
++};
++
++#endif /* TES_DAVE_MODULE_H_ */
+-- 
+2.34.1
+

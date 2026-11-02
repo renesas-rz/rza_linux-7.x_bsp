@@ -1,0 +1,320 @@
+From 5e713d549d886be24e0f695fde6c77d6c21909a5 Mon Sep 17 00:00:00 2001
+From: Magnus Damm <damm@opensource.se>
+Date: Sun, 6 Jul 2025 13:28:59 +0200
+Subject: [PATCH 01/13] ARM: renesas: Add RZ/A2 support
+
+Add bare minimal RZ/A2M SoC support including a shared defconfig
+
+Signed-off-by: Magnus Damm <damm@opensource.se>
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ arch/arm/mach-renesas/Kconfig             |   5 +
+ arch/arm/mach-renesas/Kconfig.rza2        |   7 ++
+ board/renesas/common/Makefile             |   8 ++
+ board/renesas/common/rza2-common.c        |  28 +++++
+ board/renesas/common/rza2-lowlevel_init.S | 130 ++++++++++++++++++++++
+ configs/renesas_rza2.config               |  53 +++++++++
+ 6 files changed, 231 insertions(+)
+ create mode 100644 arch/arm/mach-renesas/Kconfig.rza2
+ create mode 100644 board/renesas/common/rza2-common.c
+ create mode 100644 board/renesas/common/rza2-lowlevel_init.S
+ create mode 100644 configs/renesas_rza2.config
+
+diff --git a/arch/arm/mach-renesas/Kconfig b/arch/arm/mach-renesas/Kconfig
+index f86acc31..3ebb253c 100644
+--- a/arch/arm/mach-renesas/Kconfig
++++ b/arch/arm/mach-renesas/Kconfig
+@@ -59,6 +59,10 @@ config RZA1
+ 	prompt "Renesas ARM SoCs RZ/A1 (32bit)"
+ 	select CPU_V7A
+ 
++config RZA2
++	prompt "Renesas ARM SoCs RZ/A2 (32bit)"
++	select CPU_V7A
++
+ config RZN1
+ 	prompt "Renesas ARM SoCs RZ/N1 (32bit)"
+ 	select CPU_V7A
+@@ -104,6 +108,7 @@ config SYS_SOC
+ source "arch/arm/mach-renesas/Kconfig.32"
+ source "arch/arm/mach-renesas/Kconfig.64"
+ source "arch/arm/mach-renesas/Kconfig.rza1"
++source "arch/arm/mach-renesas/Kconfig.rza2"
+ source "arch/arm/mach-renesas/Kconfig.rzn1"
+ source "arch/arm/mach-renesas/Kconfig.rzg2l"
+ 
+diff --git a/arch/arm/mach-renesas/Kconfig.rza2 b/arch/arm/mach-renesas/Kconfig.rza2
+new file mode 100644
+index 00000000..99e6ca5e
+--- /dev/null
++++ b/arch/arm/mach-renesas/Kconfig.rza2
+@@ -0,0 +1,7 @@
++if RZA2
++
++config CPU_RZA2
++	bool
++	default y
++
++endif
+diff --git a/board/renesas/common/Makefile b/board/renesas/common/Makefile
+index 16902d21..87d7890c 100644
+--- a/board/renesas/common/Makefile
++++ b/board/renesas/common/Makefile
+@@ -6,6 +6,7 @@
+ 
+ # R-Car SoCs
+ ifndef CONFIG_RZA1
++ifndef CONFIG_RZA2
+ ifndef CONFIG_RZG2L
+ 
+ # 32 bit SoCs
+@@ -53,6 +54,7 @@ endif
+ endif
+ endif
+ 
++endif
+ endif
+ endif
+ 
+@@ -61,3 +63,9 @@ ifdef CONFIG_RZA1
+ obj-y	+= rza1-common.o
+ obj-y	+= rza1-lowlevel_init.o
+ endif
++
++# RZ/A2 SoCs
++ifdef CONFIG_RZA2
++obj-y	+= rza2-common.o
++obj-y	+= rza2-lowlevel_init.o
++endif
+diff --git a/board/renesas/common/rza2-common.c b/board/renesas/common/rza2-common.c
+new file mode 100644
+index 00000000..34b0c258
+--- /dev/null
++++ b/board/renesas/common/rza2-common.c
+@@ -0,0 +1,28 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright (C) 2017 Renesas Electronics
++ * Copyright (C) Chris Brandt
++ */
++
++#include <init.h>
++#include <asm/io.h>
++
++#define RZA2_WDT_BASE	0xFCFE7000
++#define WTCSR		(RZA2_WDT_BASE + 0x00) /* Watchdog Timer Control Register */
++#define WTCNT		(RZA2_WDT_BASE + 0x02) /* Watchdog Timer Counter Register */
++#define WRCSR		(RZA2_WDT_BASE + 0x04) /* Watchdog Reset Control Register */
++
++void __weak reset_cpu(void)
++{
++	/* Dummy read (must read WRCSR:WOVF at least once before clearing) */
++	writeb(readb(WRCSR), WRCSR);
++
++	writew(0xa500, WRCSR); /* Clear WOVF */
++	writew(0x5a5f, WRCSR); /* Reset Enable */
++	writew(0x5a00, WTCNT); /* Counter to 00 */
++	writew(0xa578, WTCSR); /* Start timer */
++
++	/* Wait for WDT overflow */
++	for (;;)
++		asm volatile("wfi");
++}
+diff --git a/board/renesas/common/rza2-lowlevel_init.S b/board/renesas/common/rza2-lowlevel_init.S
+new file mode 100644
+index 00000000..d17be4b7
+--- /dev/null
++++ b/board/renesas/common/rza2-lowlevel_init.S
+@@ -0,0 +1,130 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Copyright (C) 2018 Renesas Electronics Corporation
++ * Copyright (C) 2018 Chris Brandt
++ */
++#include <config.h>
++#include <asm/macro.h>
++
++.macro  dummy_read32, addr
++	ldr     r4, =\addr
++	ldr     r5, [r4]
++.endm
++
++.macro  dummy_read8, addr
++	ldr     r4, =\addr
++	ldrb    r6, [r4]
++.endm
++
++#define RZA2_WDT_BASE	0xFCFE7000
++#define RZA2_STBCR_BASE	0xFCFE0020
++
++/* Watchdog Registers */
++#define WTCSR		(RZA2_WDT_BASE + 0x00) /* Watchdog Timer Control Register */
++#define WTCNT		(RZA2_WDT_BASE + 0x02) /* Watchdog Timer Counter Register */
++#define WRCSR		(RZA2_WDT_BASE + 0x04) /* Watchdog Reset Control Register */
++
++/* Disable WDT */
++#define WTCSR_D		0xA518
++#define WTCNT_D		0x5A00
++
++/* PL310 L2 Cache */
++#define PL310_BASE	0x1F003000
++#define REG15_PWR_CTRL	0xf80
++
++/* Clock Registers */
++#define FRQCR		0xFCFE0010
++#define CKIOSEL		0xFCFE0100
++
++#define FRQCR_D		0x1012
++#define CKIOSEL_D	0x0000 /* CKIO Output = B Clock  */
++
++/* Standby controller registers */
++#define STBCR1		(RZA2_STBCR_BASE + 0x000)
++#define STBCR2		(RZA2_STBCR_BASE + 0x004)
++#define STBCR3		(RZA2_STBCR_BASE + 0x400)
++#define STBCR4		(RZA2_STBCR_BASE + 0x404)
++#define STBCR5		(RZA2_STBCR_BASE + 0x408)
++#define STBCR6		(RZA2_STBCR_BASE + 0x40c)
++#define STBCR7		(RZA2_STBCR_BASE + 0x410)
++#define STBCR8		(RZA2_STBCR_BASE + 0x414)
++#define STBCR9		(RZA2_STBCR_BASE + 0x418)
++#define STBCR10		(RZA2_STBCR_BASE + 0x41c)
++#define STBCR11		(RZA2_STBCR_BASE + 0x420)
++#define STBCR12		(RZA2_STBCR_BASE + 0x424)
++#define STBCR13		(RZA2_STBCR_BASE + 0x450)
++
++/* Enable all peripheral clocks */
++#define STBCR2_D        0x6A
++#define STBCR3_D        0x80 /* OSTM0, OSTM1, OSTM3, MTU3, CAN-FD, ADC, GPT */
++#define STBCR4_D        0x00 /* SCIF0, SCIF1, SCIF2, SCIF3, SCIF4, SCI0, SCI1,IrDA */
++#define STBCR5_D        0x31 /* A/D, CEU, RTC0, RTC1, JCU */
++#define STBCR6_D        0x80 /* VIN, ETHER0, ETHER1, EtherPTR, EtherM, USB0, USB1 */
++#define STBCR7_D        0x10 /* IMR-LS2, DAVE-2D, MIPI, SSIF0, SSIF1, SSIF2, SSIF3 */
++#define STBCR8_D        0x05 /* IIC0, IIC1, IIC2, IIC3, SPIBSC, VDC6 */
++#define STBCR9_D        0x10 /* RSPI0, RSPI1, RSPI2, HYPER, OCTA, SPDIF, DRP */
++#define STBCR10_D       0x00 /* TSIP, SDHI00, SDHI01, SDHI10, SDHI11 */
++#define STBCR11_D       0x3F /* POE3, POEG */
++
++#define SYSCR1		0xFCFE0400 /* System control register 1 */
++#define SYSCR2		0xFCFE0404 /* System control register 2 */
++#define SYSCR3		0xFCFE0408 /* System control register 3 */
++
++	.global	lowlevel_init
++
++	.text
++	.align	2
++
++lowlevel_init:
++	/* PL310 init: Power Control Register */
++	write32 (PL310_BASE + REG15_PWR_CTRL), 1   /* Standby mode enable */
++	dummy_read32 (PL310_BASE + REG15_PWR_CTRL) /* dummy read */
++
++	/* Set clocks */
++	write16 FRQCR, FRQCR_D
++	write16 CKIOSEL, CKIOSEL_D
++
++	/* Enable all peripherals (Standby Control) */
++	write8 STBCR3, STBCR3_D
++	dummy_read8 STBCR3
++	write8 STBCR4, STBCR4_D
++	dummy_read8 STBCR4
++	write8 STBCR5, STBCR5_D
++	dummy_read8 STBCR5
++	write8 STBCR6, STBCR6_D
++	dummy_read8 STBCR6
++	write8 STBCR7, STBCR7_D
++	dummy_read8 STBCR7
++	write8 STBCR8, STBCR8_D
++	dummy_read8 STBCR8
++	write8 STBCR9, STBCR9_D
++	dummy_read8 STBCR9
++	write8 STBCR10, STBCR10_D
++	dummy_read8 STBCR10
++	write8 STBCR11, STBCR11_D
++	dummy_read8 STBCR11
++
++	b part2
++
++	.pool
++	.align 4
++part2:
++	/* Disable WDT */
++	write16 WTCSR, WTCSR_D
++	write16 WTCNT, WTCNT_D
++
++	/* For serial booting, enable read ahead caching to speed things up */
++#define DRCR  0x1F80000C
++	write32 DRCR, 0x00010300        /* Read Burst ON, Length=2, Flush cache */
++
++	/* Enable all internal RAM */
++	write8 SYSCR1, 0xFF
++	write8 SYSCR2, 0xFF
++	write8 SYSCR3, 0x0F
++	dummy_read8 SYSCR3
++
++	nop
++	/* back to arch calling code */
++	mov	pc, lr
++
++	.align 4
+diff --git a/configs/renesas_rza2.config b/configs/renesas_rza2.config
+new file mode 100644
+index 00000000..bf298bee
+--- /dev/null
++++ b/configs/renesas_rza2.config
+@@ -0,0 +1,53 @@
++CONFIG_ARCH_CPU_INIT=y
++CONFIG_SYS_MALLOC_LEN=0x100000
++CONFIG_SYS_MALLOC_F_LEN=0x400
++# CONFIG_BOARD_EARLY_INIT_F is not set
++# CONFIG_CMD_ELF is not set
++# CONFIG_DISPLAY_CPUINFO is not set
++# CONFIG_EFI_LOADER is not set
++# CONFIG_MMC is not set
++CONFIG_BITBANGMII=y
++CONFIG_BOOTARGS="ignore_loglevel"
++CONFIG_BOOTDELAY=3
++CONFIG_CMD_CACHE=y
++CONFIG_CMD_DHCP=y
++CONFIG_CMD_FAT=y
++CONFIG_CMD_FS_GENERIC=y
++CONFIG_CMD_GPIO=y
++CONFIG_CMD_MII=y
++CONFIG_CMD_PING=y
++CONFIG_CMD_SNTP=y
++CONFIG_CMD_USB=y
++CONFIG_CUSTOM_SYS_INIT_SP_ADDR=0x80300000
++CONFIG_DM_ETH_PHY=y
++CONFIG_DM_GPIO=y
++CONFIG_DM_REGULATOR=y
++CONFIG_DM_REGULATOR_FIXED=y
++CONFIG_DM_SPI=y
++CONFIG_ENV_OFFSET=0x80000
++CONFIG_ENV_OVERWRITE=y
++CONFIG_ENV_SIZE=0x10000
++CONFIG_HAS_CUSTOM_SYS_INIT_SP_ADDR=y
++CONFIG_HUSH_PARSER=y
++CONFIG_LED=y
++CONFIG_LED_GPIO=y
++CONFIG_MAC_PARTITION=y
++CONFIG_NET_RANDOM_ETHADDR=y
++CONFIG_NR_DRAM_BANKS=1
++CONFIG_OF_CONTROL=y
++CONFIG_OF_LIBFDT_OVERLAY=y
++CONFIG_PHY_SMSC=y
++CONFIG_PINCTRL=y
++CONFIG_RENESAS_OSTM_TIMER=y
++CONFIG_RENESAS_RPC_SPI=y
++CONFIG_RZA2=y
++CONFIG_SCIF_CONSOLE=y
++CONFIG_SH_ETHER=y
++CONFIG_SPI=y
++CONFIG_SYS_CBSIZE=256
++CONFIG_SYS_CLK_FREQ=66666666
++CONFIG_SYS_LOAD_ADDR=0x80200000
++CONFIG_SYS_MONITOR_LEN=524288
++CONFIG_SYS_PBSIZE=256
++CONFIG_TIMER=y
++CONFIG_USE_BOOTARGS=y
+-- 
+2.34.1
+

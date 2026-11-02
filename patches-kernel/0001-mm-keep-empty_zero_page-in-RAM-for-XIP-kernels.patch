@@ -1,0 +1,32 @@
+From 7b6dcf606deef4897d30fe3632fe74090121aed2 Mon Sep 17 00:00:00 2001
+From: Pabitra Adhikari <pabitraadhikari@gmail.com>
+Date: Fri, 30 Oct 2026 19:17:01 +0000
+Subject: [PATCH 01/11] mm: keep empty_zero_page in RAM for XIP kernels
+
+With CONFIG_XIP_KERNEL, rodata stays in flash. empty_zero_page is const and lands in rodata, so its pfn is outside RAM and copy-on-write frees a flash page. Place it in .data..page_aligned for XIP.
+
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ mm/mm_init.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/mm/mm_init.c b/mm/mm_init.c
+index 1533aebaf..6bde3cafe 100644
+--- a/mm/mm_init.c
++++ b/mm/mm_init.c
+@@ -61,7 +61,12 @@ unsigned long zero_page_pfn __ro_after_init;
+ EXPORT_SYMBOL(zero_page_pfn);
+ 
+ #ifndef __HAVE_COLOR_ZERO_PAGE
++#ifdef CONFIG_XIP_KERNEL
++/* XIP: rodata stays in flash, so keep the zero page in RAM */
++const uint8_t empty_zero_page[PAGE_SIZE] __aligned(PAGE_SIZE) __section(".data..page_aligned");
++#else
+ const uint8_t empty_zero_page[PAGE_SIZE] __aligned(PAGE_SIZE);
++#endif
+ EXPORT_SYMBOL(empty_zero_page);
+ 
+ struct page *__zero_page __ro_after_init;
+-- 
+2.34.1
+

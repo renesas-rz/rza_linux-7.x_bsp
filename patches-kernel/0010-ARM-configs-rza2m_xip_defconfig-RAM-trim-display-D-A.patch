@@ -1,0 +1,32 @@
+From 7052c20597d302a6b0c2d79a3b5db69ccb6f8a8f Mon Sep 17 00:00:00 2001
+From: Pabitra Adhikari <pabitraadhikari@gmail.com>
+Date: Fri, 30 Oct 2026 21:35:25 +0000
+Subject: [PATCH 10/11] ARM: configs: rza2m_xip_defconfig: RAM trim, display,
+ D/AVE 2D, touch
+
+Smaller log buffer, unused drivers off, VDSO off, FB + FB_VDC5, DAVE2D, TOUCHSCREEN_EDT_FT5X06. Early debug on SCIF4 still enabled for bring-up.
+
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ arch/arm/configs/rza2m_xip_defconfig | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/arch/arm/configs/rza2m_xip_defconfig b/arch/arm/configs/rza2m_xip_defconfig
+index 6c07bd304..7bab7c42a 100644
+--- a/arch/arm/configs/rza2m_xip_defconfig
++++ b/arch/arm/configs/rza2m_xip_defconfig
+@@ -118,9 +118,11 @@ CONFIG_REGULATOR=y
+ CONFIG_REGULATOR_FIXED_VOLTAGE=y
+ CONFIG_REGULATOR_GPIO=y
+ CONFIG_FB=y
++CONFIG_FB_VDC5=y
+ CONFIG_FRAMEBUFFER_CONSOLE=y
+ CONFIG_FRAMEBUFFER_CONSOLE_DETECT_PRIMARY=y
+ CONFIG_LOGO=y
++CONFIG_DAVE2D=y
+ # CONFIG_HID_SUPPORT is not set
+ # CONFIG_USB_SUPPORT is not set
+ CONFIG_MMC=y
+-- 
+2.34.1
+

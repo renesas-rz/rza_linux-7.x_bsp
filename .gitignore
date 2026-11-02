@@ -1,0 +1,4 @@
+output/
+board/*/overlay/*
+!board/*/overlay/.keep
+*.o

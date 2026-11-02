@@ -1,0 +1,122 @@
+From 0f8c601c024ca87d99f5bcd1d1619d3285887633 Mon Sep 17 00:00:00 2001
+From: Pabitra Adhikari <pabitraadhikari@gmail.com>
+Date: Fri, 30 Oct 2026 21:33:50 +0000
+Subject: [PATCH 09/11] video: vdc5fb: get interrupts with platform_get_irq()
+
+Since 5.16 DT interrupts are no longer IRQ resources, so platform_get_resource(IORESOURCE_IRQ) failed and FBIO_WAITFORVSYNC was unavailable. Request each interrupt with platform_get_irq() and map the number back to its index in the handler, as virtual IRQ numbers need not be consecutive. Also set FBINFO_VIRTFB, as the frame buffer is plain RAM mapped by the driver.
+
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ drivers/video/fbdev/renesas/vdc5fb.c | 67 ++++++++++++++++------------
+ 1 file changed, 38 insertions(+), 29 deletions(-)
+
+diff --git a/drivers/video/fbdev/renesas/vdc5fb.c b/drivers/video/fbdev/renesas/vdc5fb.c
+index cd4d497b9..130fbf1ec 100644
+--- a/drivers/video/fbdev/renesas/vdc5fb.c
++++ b/drivers/video/fbdev/renesas/vdc5fb.c
+@@ -67,6 +67,7 @@ struct vdc5fb_priv {
+ 		char longname[VDC5FB_IRQ_SIZE][32];	/* ire name */
+ 		wait_queue_head_t	wait;
+ 		unsigned short irq_flag;
++		int num[VDC5FB_MAX_IRQS];
+ 	} irq;
+ 
+ 	/* display */
+@@ -129,7 +130,14 @@ static irqreturn_t vdc5fb_irq(int irq, void *data)
+ {
+ 	struct vdc5fb_priv *priv = (struct vdc5fb_priv *)data;
+ 
+-	irq = irq - priv->irq.start;
++	{
++		int i;
++
++		for (i = 0; i < VDC5FB_MAX_IRQS; i++)
++			if (priv->irq.num[i] == irq)
++				break;
++		irq = i;
++	}
+ 	switch (irq) {
+ 	case S0_VI_VSYNC:	/* INT0 */
+ 	case S0_LO_VSYNC:	/* INT1 */
+@@ -177,41 +185,42 @@ static irqreturn_t vdc5fb_irq(int irq, void *data)
+ 
+ static int vdc5fb_init_irqs(struct vdc5fb_priv *priv)
+ {
+-	int error = -EINVAL;
+-	struct platform_device *pdev;
+-	struct resource *res;
+-	int irq;
+-
+-	pdev = priv->pdev;
+-	res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
+-	if (!res)
+-		return error;
+-
+-	priv->irq.start = res->start;
+-	//priv->irq.end = res->end;
+-	priv->irq.end = res->start + VDC5FB_MAX_IRQS - 1;
+-	for (irq = 0; irq < VDC5FB_MAX_IRQS; irq++) {
+-		snprintf(priv->irq.longname[irq],
+-			sizeof(priv->irq.longname[0]), "%s: %s",
+-			priv->dev_name, irq_names[irq]);
+-		error = request_irq((priv->irq.start + irq),
+-			vdc5fb_irq, 0, priv->irq.longname[irq], priv);
+-		if (error < 0) {
+-			while (--irq >= 0)
+-				free_irq(priv->irq.start + irq, priv);
+-			return error;
++	struct platform_device *pdev = priv->pdev;
++	int error, irq, n;
++
++	for (n = 0; n < VDC5FB_MAX_IRQS; n++) {
++		irq = platform_get_irq(pdev, n);
++		if (irq < 0) {
++			error = irq;
++			goto err;
+ 		}
++		snprintf(priv->irq.longname[n],
++			sizeof(priv->irq.longname[0]), "%s: %s",
++			priv->dev_name, irq_names[n]);
++		error = request_irq(irq, vdc5fb_irq, 0, priv->irq.longname[n], priv);
++		if (error < 0)
++			goto err;
++		priv->irq.num[n] = irq;
+ 	}
+-
++	priv->irq.start = priv->irq.num[0];
++	priv->irq.end = priv->irq.num[VDC5FB_MAX_IRQS - 1];
+ 	return 0;
++
++err:
++	while (--n >= 0)
++		free_irq(priv->irq.num[n], priv);
++	priv->irq.start = 0;
++	return error;
+ }
+ 
+ static void vdc5fb_deinit_irqs(struct vdc5fb_priv *priv)
+ {
+-	int irq;
++	int n;
+ 
+-	for (irq = priv->irq.start; irq <= priv->irq.end; irq++)
+-		free_irq(irq, priv);
++	if (!priv->irq.start)
++		return;
++	for (n = 0; n < VDC5FB_MAX_IRQS; n++)
++		free_irq(priv->irq.num[n], priv);
+ }
+ 
+ /* For disabling the clocks */
+@@ -2279,7 +2288,7 @@ static int vdc5fb_probe(struct platform_device *pdev)
+ 		}
+ 	}
+ 
+-	info->flags = 0;
++	info->flags = FBINFO_VIRTFB;
+ 
+ 	error = fb_alloc_cmap(&info->cmap, PALETTE_NR, 0);
+ 	if (error < 0) {
+-- 
+2.34.1
+

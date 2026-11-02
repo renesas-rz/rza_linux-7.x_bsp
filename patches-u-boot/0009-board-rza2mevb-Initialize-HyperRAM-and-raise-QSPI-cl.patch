@@ -1,0 +1,95 @@
+From 78b9b34747f26a5758f5553fdc6e63b35e649be8 Mon Sep 17 00:00:00 2001
+From: Pabitra Adhikari <pabitraadhikari@gmail.com>
+Date: Wed, 4 Nov 2026 14:15:22 -0800
+Subject: [PATCH 09/13] board: rza2mevb: Initialize HyperRAM and raise QSPI
+ clock
+
+Initialize the HyperRAM controller so the 8 MiB HyperRAM at
+0x40000000 can be used as Linux system RAM, and select the faster
+QSPI clock. U-Boot itself keeps running from on-chip RAM.
+
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ board/renesas/rza2mevb/rza2mevb.c | 52 ++++++++++++++++++++++++++++---
+ 1 file changed, 48 insertions(+), 4 deletions(-)
+
+diff --git a/board/renesas/rza2mevb/rza2mevb.c b/board/renesas/rza2mevb/rza2mevb.c
+index 23e0dde1..037f7a33 100644
+--- a/board/renesas/rza2mevb/rza2mevb.c
++++ b/board/renesas/rza2mevb/rza2mevb.c
+@@ -1,24 +1,68 @@
+ // SPDX-License-Identifier: GPL-2.0+
+ /*
++ * RZ/A2M EVK board
++ *
+  * Copyright (C) 2017 Renesas Electronics
+  * Copyright (C) Chris Brandt
+  */
+ 
+ #include <init.h>
+ #include <asm/global_data.h>
++#include <asm/io.h>
++#include <linux/bitops.h>
++
++#define SCLKSEL			0xFCFE0104	/* 16-bit */
++
++#define PFC_BASE		0xFCFFE000
++#define PPOC			(PFC_BASE + 0x0900)
++#define PHMOMO			(PFC_BASE + 0x0980)
++
++#define HYPER_BASE		0x1F400000
++#define HYPER_MCR0		(HYPER_BASE + 0x20)
++#define HYPER_MCR1		(HYPER_BASE + 0x24)
++#define HYPER_MTR0		(HYPER_BASE + 0x30)
++#define HYPER_MTR1		(HYPER_BASE + 0x34)
++
++#define MCR_DEVTYPE_RAM		BIT(4)
++#define MCR_WRAPSIZE_32B	3
++#define MTR_LTCY_6CLK		1
++
++#define PPOC_POCSEL1		BIT(9)
++#define PPOC_POCSEL0		BIT(8)
++#define PPOC_POC3_3V3		BIT(3)	/* SDMMC1 */
++#define PPOC_POC2_3V3		BIT(2)	/* SDMMC0 */
++#define PPOC_POC0_3V3		BIT(0)	/* QSPI; POC1 (HyperBus) = 0: 1.8 V */
+ 
+ DECLARE_GLOBAL_DATA_PTR;
+ 
++/* HyperRAM (8 MB at 0x40000000) is the Linux system RAM; U-Boot runs in on-chip RAM */
++static void hyperram_init(void)
++{
++	setbits_le16(SCLKSEL, 3 << 4);	/* Hyper clock = G/2 */
++
++	writel(MCR_WRAPSIZE_32B, HYPER_MCR0);
++	writel(MCR_DEVTYPE_RAM | MCR_WRAPSIZE_32B, HYPER_MCR1);
++	writel(MTR_LTCY_6CLK, HYPER_MTR0);
++	writel(MTR_LTCY_6CLK, HYPER_MTR1);
++
++	writel(PPOC_POCSEL1 | PPOC_POCSEL0 | PPOC_POC3_3V3 | PPOC_POC2_3V3 |
++	       PPOC_POC0_3V3, PPOC);
++	writel(0xFFFFFFFE, PHMOMO);	/* select HyperBus */
++}
++
+ int board_init(void)
+ {
+ 	gd->bd->bi_boot_params = CFG_SYS_SDRAM_BASE + 0x100;
++
++	hyperram_init();
++
++	/* QSPI clock P0 (33 MHz) -> B (132 MHz), SPI clock 66 MHz */
++	setbits_le16(SCLKSEL, 2);
++
+ 	return 0;
+ }
+ 
+-/*
+- * Make use of the RZ/A2M on-chip memory which is 4 MiB at CFG_SYS_SDRAM_BASE.
+- */
+-
++/* U-Boot uses the RZ/A2M on-chip memory, 4 MiB at CFG_SYS_SDRAM_BASE */
+ int dram_init(void)
+ {
+ 	gd->ram_base = CFG_SYS_SDRAM_BASE;
+-- 
+2.34.1
+

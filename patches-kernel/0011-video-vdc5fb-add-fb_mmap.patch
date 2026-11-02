@@ -1,0 +1,40 @@
+From 53575139759b9ad969d8bed4d4f77af6cfaeafb7 Mon Sep 17 00:00:00 2001
+From: Pabitra Adhikari <pabitraadhikari@gmail.com>
+Date: Fri, 30 Oct 2026 22:14:56 +0000
+Subject: [PATCH 11/11] video: vdc5fb: add fb_mmap
+
+Since 6.x fbdev drivers must provide fb_mmap; without it mmap() of /dev/fb0 fails. Use fb_io_mmap(), which maps smem_start like the old default, and select FB_IOMEM_FOPS.
+
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ drivers/video/fbdev/renesas/Kconfig  | 1 +
+ drivers/video/fbdev/renesas/vdc5fb.c | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/drivers/video/fbdev/renesas/Kconfig b/drivers/video/fbdev/renesas/Kconfig
+index 26b89c104..0c2ffd5e8 100644
+--- a/drivers/video/fbdev/renesas/Kconfig
++++ b/drivers/video/fbdev/renesas/Kconfig
+@@ -3,6 +3,7 @@ config FB_VDC5
+ 	depends on FB
+ 	depends on ARCH_R7S72100 || ARCH_R7S9210
+ 	select FB_SYSMEM_HELPERS
++	select FB_IOMEM_FOPS
+ 	select FB_MODE_HELPERS
+ 	select VIDEOMODE_HELPERS
+ 	help
+diff --git a/drivers/video/fbdev/renesas/vdc5fb.c b/drivers/video/fbdev/renesas/vdc5fb.c
+index 130fbf1ec..1edd2b1ca 100644
+--- a/drivers/video/fbdev/renesas/vdc5fb.c
++++ b/drivers/video/fbdev/renesas/vdc5fb.c
+@@ -1597,6 +1597,7 @@ static struct fb_ops vdc5fb_ops = {
+ 	.owner          = THIS_MODULE,
+ 	.fb_read        = fb_sys_read,
+ 	.fb_write       = fb_sys_write,
++	.fb_mmap	= fb_io_mmap,
+ 	.fb_check_var	= vdc5fb_check_var,
+ 	.fb_set_par	= vdc5fb_set_par,
+ 	.fb_setcolreg	= vdc5fb_setcolreg,
+-- 
+2.34.1
+

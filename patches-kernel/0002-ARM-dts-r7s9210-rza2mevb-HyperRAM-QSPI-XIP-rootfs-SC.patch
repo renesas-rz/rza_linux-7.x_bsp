@@ -1,0 +1,89 @@
+From e393b4cc243adec17d5dae8d96d13596c3c1b547 Mon Sep 17 00:00:00 2001
+From: Pabitra Adhikari <pabitraadhikari@gmail.com>
+Date: Fri, 30 Oct 2026 19:17:02 +0000
+Subject: [PATCH 02/11] ARM: dts: r7s9210-rza2mevb: HyperRAM, QSPI XIP rootfs,
+ SCIF4 console
+
+Memory: 8 MB HyperRAM at 0x40000000. QSPI flash as mtd-rom with cramfs XIP rootfs partition. Console on SCIF4 (CN5 USB-serial). bootargs for cramfs root.
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ .../arm/boot/dts/renesas/r7s9210-rza2mevb.dts | 37 +++++++++++++++++--
+ 1 file changed, 33 insertions(+), 4 deletions(-)
+
+diff --git a/arch/arm/boot/dts/renesas/r7s9210-rza2mevb.dts b/arch/arm/boot/dts/renesas/r7s9210-rza2mevb.dts
+index 55221c82e..5e6ceff39 100644
+--- a/arch/arm/boot/dts/renesas/r7s9210-rza2mevb.dts
++++ b/arch/arm/boot/dts/renesas/r7s9210-rza2mevb.dts
+@@ -39,12 +39,12 @@ / {
+ 	compatible = "renesas,rza2mevb", "renesas,r7s9210";
+ 
+ 	aliases {
+-		serial0 = &scif2;
++		serial0 = &scif4;
+ 		ethernet0 = &ether1;
+ 	};
+ 
+ 	chosen {
+-		bootargs = "ignore_loglevel";
++		bootargs = "ignore_loglevel earlycon console=ttySC0,115200 clk_ignore_unused root=mtd:rootfs_xipcramfs rootfstype=cramfs                    ";
+ 		stdout-path = "serial0:115200n8";
+ 	};
+ 
+@@ -73,9 +73,27 @@ led-green {
+ 		};
+ 	};
+ 
+-	memory@c000000 {
++	memory@40000000 {
+ 		device_type = "memory";
+-		reg = <0x0c000000 0x04000000>;	/* SDRAM */
++		reg = <0x40000000 0x00800000>;	/* 8 MB HyperRAM */
++	};
++
++	qspi@20000000 {
++		compatible = "mtd-rom";
++		probe-type = "map_rom";
++		clocks = <&cpg CPG_MOD 83>;
++		power-domains = <&cpg>;
++		reg = <0x20000000 0x4000000>;	/* 64 MB */
++		bank-width = <4>;
++		device-width = <1>;
++		#address-cells = <1>;
++		#size-cells = <1>;
++
++		partition@800000 {
++			label = "rootfs_xipcramfs";
++			reg = <0x0800000 0x1000000>;	/* 16 MB @ 0x20800000 */
++			read-only;
++		};
+ 	};
+ };
+ 
+@@ -166,6 +184,11 @@ keyboard_pins: keyboard {
+ 	};
+ 
+ 	/* Serial Console */
++	scif4_pins: serial4 {
++		pinmux = <RZA2_PINMUX(PORT9, 0, 4)>,	/* TxD4 */
++			 <RZA2_PINMUX(PORT9, 1, 4)>;	/* RxD4 */
++	};
++
+ 	scif2_pins: serial2 {
+ 		pinmux = <RZA2_PINMUX(PORTE, 2, 3)>,	/* TxD2 */
+ 			 <RZA2_PINMUX(PORTE, 1, 3)>;	/* RxD2 */
+@@ -206,6 +229,12 @@ &scif2 {
+ 	status = "okay";
+ };
+ 
++&scif4 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&scif4_pins>;
++	status = "okay";
++};
++
+ &sdhi0 {
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&sdhi0_pins>;
+-- 
+2.34.1
+

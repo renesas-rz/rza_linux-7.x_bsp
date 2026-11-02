@@ -1,0 +1,201 @@
+From 6a8ebafee4004c2258f01627db983d3f21d91cf0 Mon Sep 17 00:00:00 2001
+From: Magnus Damm <damm@opensource.se>
+Date: Sun, 6 Jul 2025 13:29:06 +0200
+Subject: [PATCH 02/13] pinctrl: renesas: Add RZ/A2 pinctrl support
+
+Add pinctrl support for RZ/A2 r7s9210. The actual configuration is
+taken from DT and the current rather simple implementation is enough
+to at least configure serial console and Ethernet.
+
+Signed-off-by: Magnus Damm <damm@opensource.se>
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ drivers/pinctrl/renesas/Kconfig        |   9 +-
+ drivers/pinctrl/renesas/Makefile       |   1 +
+ drivers/pinctrl/renesas/pinctrl-rza2.c | 136 +++++++++++++++++++++++++
+ 3 files changed, 145 insertions(+), 1 deletion(-)
+ create mode 100644 drivers/pinctrl/renesas/pinctrl-rza2.c
+
+diff --git a/drivers/pinctrl/renesas/Kconfig b/drivers/pinctrl/renesas/Kconfig
+index 171da88c..4b3550ea 100644
+--- a/drivers/pinctrl/renesas/Kconfig
++++ b/drivers/pinctrl/renesas/Kconfig
+@@ -3,7 +3,7 @@ if ARCH_RENESAS
+ config PINCTRL_PFC
+ 	bool "Renesas pin control drivers"
+ 	depends on DM && ARCH_RENESAS
+-	default n if CPU_RZA1
++	default n if CPU_RZA1 || CPU_RZA2
+ 	help
+ 	  Support pin multiplexing control on Renesas SoCs.
+ 
+@@ -161,6 +161,13 @@ config PINCTRL_RZA1
+ 	help
+ 	  Support pin multiplexing control on Renesas RZ/A1 R7S72100 SoCs.
+ 
++config PINCTRL_RZA2
++	bool "Renesas RZ/A2 R7S9210 pin control driver"
++	depends on CPU_RZA2
++	default y if CPU_RZA2
++	help
++	  Support pin multiplexing control on Renesas RZ/A2 R7S9210 SoCs.
++
+ config PINCTRL_RZG2L
+ 	bool "Renesas RZ/G2L family pin control driver"
+ 	depends on PINCTRL
+diff --git a/drivers/pinctrl/renesas/Makefile b/drivers/pinctrl/renesas/Makefile
+index f9ac5eab..047eeb13 100644
+--- a/drivers/pinctrl/renesas/Makefile
++++ b/drivers/pinctrl/renesas/Makefile
+@@ -22,5 +22,6 @@ obj-$(CONFIG_PINCTRL_PFC_R8A779G0) += pfc-r8a779g0.o
+ obj-$(CONFIG_PINCTRL_PFC_R8A779H0) += pfc-r8a779h0.o
+ obj-$(CONFIG_PINCTRL_PFC_R8A78000) += pfc-r8a78000.o
+ obj-$(CONFIG_PINCTRL_RZA1) += pinctrl-rza1.o
++obj-$(CONFIG_PINCTRL_RZA2) += pinctrl-rza2.o
+ obj-$(CONFIG_PINCTRL_RZN1) += pinctrl-rzn1.o
+ obj-$(CONFIG_PINCTRL_RZG2L) += rzg2l-pfc.o
+diff --git a/drivers/pinctrl/renesas/pinctrl-rza2.c b/drivers/pinctrl/renesas/pinctrl-rza2.c
+new file mode 100644
+index 00000000..d55eff57
+--- /dev/null
++++ b/drivers/pinctrl/renesas/pinctrl-rza2.c
+@@ -0,0 +1,136 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * RZ/A2 pin controller support
++ *
++ * Based on R7S72100 pinctrl, Copyright (C) 2019 Marek Vasut
++ * Based on RZA2MEVB board code, Copyright (C) 2018 Chris Brandt
++ *
++ * Copyright (C) 2018 Renesas Electronics Corporation
++ */
++
++#include <dm.h>
++#include <asm/global_data.h>
++#include <dm/lists.h>
++#include <dm/pinctrl.h>
++#include <linux/bitops.h>
++#include <linux/io.h>
++#include <linux/err.h>
++
++#define PDR_BASE        0x0000     /* 16-bit, 2 bytes apart */
++#define PODR_BASE       0x0040     /* 8-bit, 1 byte apart */
++#define PIDR_BASE       0x0060     /* 8-bit, 1 byte apart */
++#define PMR_BASE        0x0080     /* 8-bit, 1 byte apart */
++#define DSCR_BASE       0x0140     /* 16-bit, 2 bytes apart */
++#define PFS_BASE        0x0200     /* 8-bit, 8 bytes apart */
++#define PWPR            0x02FF     /* 8-bit */
++#define PFENET          0x0820     /* 8-bit */
++#define PPOC            0x0900     /* 32-bit */
++#define PHMOMO          0x0980     /* 32-bit */
++#define PMODEPFS        0x09C0     /* 32-bit */
++#define PCKIO           0x09D0     /* 8-bit */
++
++#define RZA2_PINS_PER_PORT 8
++
++DECLARE_GLOBAL_DATA_PTR;
++
++struct r7s9210_pfc_plat {
++	void __iomem	*base;
++};
++
++static void r7s9210_pfc_set_function(struct udevice *dev, u8 port, u8 pin, u8 func)
++{
++	struct r7s9210_pfc_plat *plat = dev_get_plat(dev);
++	u16 reg16, mask16;
++
++	/* Set pin to 'Non-use (Hi-z input protection)' */
++	reg16 = readw(plat->base + PDR_BASE + (port * 2));
++	mask16 = 0x03 << (pin * 2);
++	reg16 &= ~mask16;
++	writew(reg16, plat->base + PDR_BASE + (port * 2));
++
++	/* Temporary switch to GPIO */
++	clrbits_8(plat->base + PMR_BASE + port, BIT(pin));
++
++	/* PFS Register Write Protect : OFF */
++	writeb(0x00, plat->base + PWPR); /* B0WI=0, PFSWE=0 */
++	writeb(0x40, plat->base + PWPR); /* B0WI=0, PFSWE=1 */
++
++	/* Set Pin function (interrupt disabled, ISEL=0) */
++	writeb(func, plat->base + PFS_BASE + (port * 8) + pin);
++
++	/* PFS Register Write Protect : ON */
++	writeb(0x00, plat->base + PWPR); /* B0WI=0, PFSWE=0 */
++	writeb(0x80, plat->base + PWPR); /* B0WI=1, PFSWE=0 */
++
++	/* Port Mode : Peripheral module pin functions */
++	setbits_8(plat->base + PMR_BASE + port, BIT(pin));
++}
++
++static int r7s9210_pfc_set_state(struct udevice *dev, struct udevice *config)
++{
++	const void *blob = gd->fdt_blob;
++	int node = dev_of_offset(config);
++	u32 cells[32];
++	u16 bank, line, func;
++	int i, count;
++
++	count = fdtdec_get_int_array_count(blob, node, "pinmux",
++					   cells, ARRAY_SIZE(cells));
++	if (count < 0) {
++		printf("%s: bad pinmux array %d\n", __func__, count);
++		return -EINVAL;
++	}
++
++	if (count > ARRAY_SIZE(cells)) {
++		printf("%s: unsupported pinmux array count %d\n",
++		       __func__, count);
++		return -EINVAL;
++	}
++
++	for (i = 0 ; i < count; i++) {
++		func = (cells[i] >> 16) & 0xf;
++		if (func == 0 || func > 8) {
++			printf("Invalid cell %i in node %s!\n",
++			       count, ofnode_get_name(dev_ofnode(config)));
++			continue;
++		}
++
++		bank = (cells[i] / RZA2_PINS_PER_PORT) & 0xff;
++		line = cells[i] % RZA2_PINS_PER_PORT;
++
++		r7s9210_pfc_set_function(dev, bank, line, func);
++	}
++
++	return 0;
++}
++
++const struct pinctrl_ops r7s9210_pfc_ops  = {
++	.set_state = r7s9210_pfc_set_state,
++};
++
++static int r7s9210_pfc_probe(struct udevice *dev)
++{
++	struct r7s9210_pfc_plat *plat = dev_get_plat(dev);
++	fdt_addr_t addr_base;
++
++	addr_base = dev_read_addr(dev);
++	if (addr_base == FDT_ADDR_T_NONE)
++		return -EINVAL;
++
++	plat->base = (void __iomem *)addr_base;
++	return 0;
++}
++
++static const struct udevice_id r7s9210_pfc_match[] = {
++	{ .compatible = "renesas,r7s9210-pinctrl" },
++	{}
++};
++
++U_BOOT_DRIVER(r7s9210_pfc) = {
++	.name		= "r7s9210_pfc",
++	.id		= UCLASS_PINCTRL,
++	.of_match	= r7s9210_pfc_match,
++	.probe		= r7s9210_pfc_probe,
++	.plat_auto	= sizeof(struct r7s9210_pfc_plat),
++	.ops		= &r7s9210_pfc_ops,
++};
+-- 
+2.34.1
+

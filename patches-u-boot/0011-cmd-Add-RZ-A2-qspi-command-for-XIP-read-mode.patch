@@ -1,0 +1,438 @@
+From b15dd65dd70585cdfda0496e3e85a72dd3901e6d Mon Sep 17 00:00:00 2001
+From: Pabitra Adhikari <pabitraadhikari@gmail.com>
+Date: Wed, 4 Nov 2026 14:46:48 -0800
+Subject: [PATCH 11/13] cmd: Add RZ/A2 qspi command for XIP read mode
+
+Add the qspi command to switch the RZ/A2 SPI Multi I/O Bus controller
+to quad I/O SDR or DDR read mode for XIP, including the DDR PHY timing
+adjustment (ddr_adj). Only a single Macronix flash is supported; the
+flash quad enable bit is set before the mode switch.
+
+Enable it for the RZ/A2M EVK.
+
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ cmd/Kconfig                |   7 +
+ cmd/Makefile               |   1 +
+ cmd/rza2_qspi.c            | 369 +++++++++++++++++++++++++++++++++++++
+ configs/rza2mevb_defconfig |   1 +
+ 4 files changed, 378 insertions(+)
+ create mode 100644 cmd/rza2_qspi.c
+
+diff --git a/cmd/Kconfig b/cmd/Kconfig
+index d1e4dc0d..66f2a276 100644
+--- a/cmd/Kconfig
++++ b/cmd/Kconfig
+@@ -392,6 +392,13 @@ config CMD_BOOTX
+ 	  Boot an XIP kernel that runs in place from flash, with r2 set
+ 	  to the device tree address (Renesas RZ/A).
+ 
++config CMD_RZA2_QSPI
++	bool "qspi (RZ/A2 QSPI XIP read mode)"
++	depends on RZA2 && SPI_FLASH
++	help
++	  Set the RZ/A2 SPI multi I/O bus controller to a faster XIP read
++	  mode (quad I/O, SDR or DDR) before booting an XIP kernel.
++
+ config CMD_BOOTZ
+ 	bool "bootz"
+ 	depends on LMB
+diff --git a/cmd/Makefile b/cmd/Makefile
+index dbf0f8ab..e3a9c2c5 100644
+--- a/cmd/Makefile
++++ b/cmd/Makefile
+@@ -38,6 +38,7 @@ obj-$(CONFIG_CMD_BOOTEFI) += bootefi.o
+ obj-$(CONFIG_CMD_BOOTMENU) += bootmenu.o
+ obj-$(CONFIG_CMD_BOOTSTAGE) += bootstage.o
+ obj-$(CONFIG_CMD_BOOTX) += bootx.o
++obj-$(CONFIG_CMD_RZA2_QSPI) += rza2_qspi.o
+ obj-$(CONFIG_CMD_BOOTZ) += bootz.o
+ obj-$(CONFIG_CMD_BOOTI) += booti.o
+ obj-$(CONFIG_CMD_BTRFS) += btrfs.o
+diff --git a/cmd/rza2_qspi.c b/cmd/rza2_qspi.c
+new file mode 100644
+index 00000000..7e1bdd90
+--- /dev/null
++++ b/cmd/rza2_qspi.c
+@@ -0,0 +1,369 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * qspi: set the RZ/A2 SPI multi I/O bus controller (SPIBSC) XIP read mode
++ *
++ * Copyright (C) 2017 Renesas Electronics
++ * Copyright (C) 2017 Chris Brandt
++ */
++
++#include <command.h>
++#include <spi.h>
++#include <spi_flash.h>
++#include <stdio.h>
++#include <vsprintf.h>
++#include <asm/global_data.h>
++#include <asm/io.h>
++#include <linux/errno.h>
++#include <linux/kernel.h>
++#include <linux/string.h>
++
++DECLARE_GLOBAL_DATA_PTR;
++
++#define QSPI_BASE		0x1F800000
++#define QSPI_XIP_BASE		0x20000000
++
++#define CMNCR			(QSPI_BASE + 0x000)
++#define SSLDR			(QSPI_BASE + 0x004)
++#define DRCR			(QSPI_BASE + 0x00C)
++#define DRCMR			(QSPI_BASE + 0x010)
++#define DREAR			(QSPI_BASE + 0x014)
++#define DROPR			(QSPI_BASE + 0x018)
++#define DRENR			(QSPI_BASE + 0x01C)
++#define DMDMCR			(QSPI_BASE + 0x058)
++#define DRDRENR			(QSPI_BASE + 0x05C)
++#define PHYADJ1			(QSPI_BASE + 0x070)
++#define PHYADJ2			(QSPI_BASE + 0x074)
++#define PHYCNT			(QSPI_BASE + 0x07C)
++#define PHYOFFSET1		(QSPI_BASE + 0x080)
++
++/* 4-byte address read commands (64 MB flash) */
++#define FAST_READ		0x0C
++#define QUAD_READ		0x6C
++#define QUAD_IO_READ		0xEC
++#define QUAD_IO_DDR_READ	0xEE
++
++/* Macronix MX25L51245G dummy cycles */
++#define FAST_RD_DMY		8
++#define QUAD_RD_DMY		8
++#define QUAD_IO_RD_DMY		6
++#define QUAD_IO_DDR_RD_DMY	6
++
++struct read_mode {
++	u8 cmd;
++	const char *name;
++};
++
++static const struct read_mode modes[] = {
++	{0x03, "Read Mode (3-byte Addr) (reset value)"},
++	{0x0C, "Fast Read Mode (4-byte Addr)"},
++	{0x6C, "Quad Read Mode (4-byte Addr)"},
++	{0xEC, "Quad I/O Read Mode (4-byte Addr)"},
++	{0xEE, "Quad I/O DDR Read Mode (4-byte Addr)"},
++	{0x0B, "Fast Read Mode (3-byte Addr)"},
++	{0x6B, "Quad Read Mode (3-byte Addr)"},
++	{0xEB, "Quad I/O Read Mode (3-byte Addr)"},
++	{0xED, "Quad I/O DDR Read Mode (3-byte Addr)"},
++};
++
++static void print_mode(const char *label)
++{
++	u8 cmd = (readl(DRCMR) >> 16) & 0xFF;
++	int i;
++
++	printf("%s: ", label);
++	for (i = 0; i < ARRAY_SIZE(modes); i++)
++		if (modes[i].cmd == cmd)
++			printf("%s", modes[i].name);
++	printf("\n");
++}
++
++static int flash_cmd(struct spi_slave *spi, u8 cmd, const u8 *tx, u8 *rx,
++		     size_t len)
++{
++	return spi_write_then_read(spi, &cmd, 1, tx, rx, len);
++}
++
++/* Set the Macronix status register QE bit (quad enable) if it is not set */
++static int enable_quad_macronix(struct spi_slave *spi)
++{
++	u8 sr, wr[2] = { 0x40, 0x00 };
++	int ret;
++
++	ret = flash_cmd(spi, 0x05, NULL, &sr, 1);		/* RDSR */
++	if (ret || sr == 0x40)
++		return ret;
++
++	ret = flash_cmd(spi, 0x06, NULL, NULL, 0);		/* WREN */
++	ret |= flash_cmd(spi, 0x01, wr, NULL, 2);		/* WRSR */
++	do
++		ret |= flash_cmd(spi, 0x05, NULL, &sr, 1);
++	while (!ret && (sr & 0x01));				/* WIP */
++
++	return ret;
++}
++
++static int setup_flash(void)
++{
++	struct spi_flash *flash;
++	struct spi_slave *spi;
++	u8 id[3];
++	int ret;
++
++	flash = spi_flash_probe(0, 0, 1000000, SPI_MODE_3);
++	if (!flash) {
++		printf("Failed to initialize SPI flash.\n");
++		return -ENODEV;
++	}
++	spi = flash->spi;
++
++	ret = spi_claim_bus(spi);
++	if (ret)
++		goto out;
++
++	ret = flash_cmd(spi, 0x9F, NULL, id, 3);		/* RDID */
++	if (!ret && id[0] != 0xC2) {
++		printf("ERROR: SPI flash ID %02X%02X%02X is not supported (Macronix only)\n",
++		       id[0], id[1], id[2]);
++		ret = -ENODEV;
++	}
++	if (!ret)
++		ret = enable_quad_macronix(spi);
++
++	spi_release_bus(spi);
++out:
++	spi_flash_free(flash);
++	if (ret)
++		printf("Failed to set SPI flash configuration.\n");
++	return ret;
++}
++
++/* PHY timing adjustment table: PHYADJ2 value, PHYCNT.CKSEL */
++static const struct {
++	u8 xy;
++	u8 zz;
++} phy_adj[13] = {
++	{ 0x01, 0x3 }, { 0x11, 0x3 }, { 0x01, 0x2 }, { 0x11, 0x2 },
++	{ 0x01, 0x1 }, { 0x00, 0x3 }, { 0x10, 0x3 }, { 0x00, 0x2 },
++	{ 0x10, 0x2 }, { 0x00, 0x1 }, { 0x10, 0x1 }, { 0x00, 0x0 },
++	{ 0x10, 0x0 },
++};
++
++static void phy_unlock_and_set(u32 adj)
++{
++	writel(0xA5390000, PHYADJ2);
++	writel(0x80000000, PHYADJ1);
++	writel(adj, PHYADJ2);
++	writel(0x80000022, PHYADJ1);
++	writel(adj, PHYADJ2);
++	writel(0x80000024, PHYADJ1);
++}
++
++static void phy_set_index(u8 index)
++{
++	writel(readl(PHYCNT) | ((u32)phy_adj[index].zz << 16), PHYCNT);
++	writel(phy_adj[index].xy, PHYADJ2);
++	writel(0x80000032, PHYADJ1);
++}
++
++#define TEST_VALUE	0xAA00FF55
++static const u32 test_pattern = TEST_VALUE;
++
++/* Find the DDR timing index: hardware manual Figure 20.28 */
++static u8 timing_adj_calc(void)
++{
++	/* copy of test_pattern in the U-Boot image in QSPI flash */
++	volatile u32 *flash_val = (volatile u32 *)((ulong)&test_pattern -
++						   gd->relocaddr + QSPI_XIP_BASE);
++	u8 results[13], start = 0, ok_cnt = 0, index;
++	int i;
++
++	phy_unlock_and_set(0x00009191);
++
++	writel(0, DRCR);			/* read burst off */
++	readl(DRCR);
++
++	for (i = 0; i < 13; i++) {
++		writel(0x00000200, DRCR);	/* read cache flush */
++		asm("nop");
++		readl(DRCR);
++
++		writel((readl(PHYCNT) & ~0x30000) | ((u32)phy_adj[i].zz << 16), PHYCNT);
++		writel(phy_adj[i].xy, PHYADJ2);
++		writel(0x80000032, PHYADJ1);
++		readl(PHYADJ1);
++
++		results[i] = (*flash_val == TEST_VALUE);
++	}
++
++	printf("Test results:\n");
++	for (i = 0; i < 13; i++)
++		printf("\t[%d] = %s\n", i, results[i] ? "good" : "bad");
++
++	for (i = 0; i < 13; i++)
++		if (results[i]) {
++			start = i;
++			break;
++		}
++	for (i = start; i < 13 && results[i]; i++)
++		ok_cnt++;
++
++	if (ok_cnt > 3) {
++		index = ok_cnt / 2 + start;
++		printf("Adjustment index = %d\n", index);
++		printf("Set this number using 'qspi ddr_adj' before entering DDR mode\n");
++		printf("Example:\n\t=> qspi ddr_adj %d\n\t=> qspi single a4 d4 ddr\n\n", index);
++	} else {
++		printf("ERROR: Not enough good values to get center value.\n");
++		index = 7;
++	}
++
++	phy_set_index(index);
++	return index;
++}
++
++static int do_qspi(struct cmd_tbl *cmdtp, int flag, int argc,
++		   char *const argv[])
++{
++	static u8 tm_adj_index = 7;	/* RZ/A2M EVK */
++	u8 quad_addr = 1, quad_data = 1, ddr = 0;
++	u32 dmdmcr, drenr, cmncr, drcmr, dropr, drdrenr;
++
++	if (argc < 2)
++		return CMD_RET_USAGE;
++
++	if (!strcmp(argv[1], "ddr_adj")) {
++		if (argc > 2) {
++			tm_adj_index = dectoul(argv[2], NULL);
++			if (tm_adj_index > 12)
++				tm_adj_index = 7;
++			return 0;
++		}
++		if ((readl(PHYCNT) & 0x3) != 0x1) {
++			printf("\nERROR: Please put into DDR mode using qspi first before doing timing adjustment measurements.\n\n");
++			return 0;
++		}
++		tm_adj_index = timing_adj_calc();
++		return 0;
++	}
++
++	if (strcmp(argv[1], "single")) {
++		if (!strcmp(argv[1], "dual"))
++			printf("Dual SPI flash is not supported on this board\n");
++		return CMD_RET_USAGE;
++	}
++
++	if (argc > 2) {
++		if (!strcmp(argv[2], "a1"))
++			quad_addr = 0;
++		else if (strcmp(argv[2], "a4"))
++			return CMD_RET_USAGE;
++	}
++	if (argc > 3) {
++		if (!strcmp(argv[3], "d1"))
++			quad_data = 0;
++		else if (strcmp(argv[3], "d4"))
++			return CMD_RET_USAGE;
++	}
++	if (argc > 4) {
++		if (!strcmp(argv[4], "ddr"))
++			ddr = 1;
++		else if (strcmp(argv[4], "sdr"))
++			return CMD_RET_USAGE;
++	}
++	if ((quad_addr && !quad_data) || (ddr && !quad_addr))
++		return CMD_RET_USAGE;
++
++	dmdmcr = readl(DMDMCR);
++	drenr = readl(DRENR);
++	cmncr = readl(CMNCR);
++	drcmr = readl(DRCMR);
++	dropr = readl(DROPR);
++	drdrenr = readl(DRDRENR);
++
++	print_mode("Current Mode");
++
++	if (setup_flash())
++		return 1;
++
++	/*
++	 * External address space read mode (MD = 0; the SPI driver may have
++	 * left manual mode on), data pins high when idle, data swap (SFDE),
++	 * single memory
++	 */
++	cmncr = (cmncr & ~0x80FF0001) | 0x00550000 | 0x01000000;
++
++	if (quad_addr) {
++		/* 1-bit cmd, 4-bit addr, 4-bit data, 32-bit address */
++		drcmr = (u32)QUAD_IO_READ << 16;
++		drenr = 0x02024f00;
++		dmdmcr = 0x00020000 | (QUAD_IO_RD_DMY - 1);
++	} else if (quad_data) {
++		/* 1-bit cmd, 1-bit addr, 4-bit data, 32-bit address */
++		drcmr = (u32)QUAD_READ << 16;
++		drenr = 0x00024f00;
++		dmdmcr = 0x00020000 | (QUAD_RD_DMY - 1);
++	} else {
++		/* 1-bit cmd, 1-bit addr, 1-bit data, 32-bit address */
++		drcmr = (u32)FAST_READ << 16;
++		drenr = 0x00004f00;
++		dmdmcr = FAST_RD_DMY - 1;
++	}
++	drenr |= 0x00008000;			/* dummy cycle enable (DME) */
++
++	if (ddr) {
++		drcmr = (u32)QUAD_IO_DDR_READ << 16;
++		drdrenr = 0x00000111;		/* address, option, data DDR */
++		dmdmcr = 0x00020000 | (QUAD_IO_DDR_RD_DMY - 1);
++	} else {
++		drdrenr = 0;
++	}
++
++	writel(dmdmcr, DMDMCR);
++	writel(drenr, DRENR);
++	writel(cmncr, CMNCR);
++	writel(drcmr, DRCMR);
++	writel(dropr, DROPR);
++	writel(drdrenr, DRDRENR);
++
++	writel(0x00000001, DREAR);		/* 32-bit addressing */
++
++	/* Read burst on, 2 units, cache flush, keep SSL low (SSLE) */
++	writel(0x00010301, DRCR);
++	asm("nop");
++	readl(DRCR);
++
++	writel(0, SSLDR);			/* no SSL delay */
++
++	if (!ddr) {
++		/* SDR: Figure 20.28(1) */
++		writel(readl(PHYOFFSET1) | (3 << 28), PHYOFFSET1);
++		phy_unlock_and_set(0x00008080);
++		writel(readl(PHYCNT) | (3 << 16), PHYCNT);	/* CKSEL = 11b */
++		writel(0x00000000, PHYADJ2);
++		writel(0x80000032, PHYADJ1);
++	} else {
++		/* DDR: PHYMEM = 01b, DDRTMG = 10b, Figure 20.28 */
++		writel((readl(PHYCNT) & ~0x3) | 0x1, PHYCNT);
++		writel((readl(PHYOFFSET1) & ~0x30000000) | (2 << 28), PHYOFFSET1);
++		phy_unlock_and_set(0x00009191);
++		phy_set_index(tm_adj_index);
++	}
++
++	/* dummy reads (out of order) to clean things up */
++	readl(QSPI_XIP_BASE + 0x10);
++	readl(QSPI_XIP_BASE);
++
++	print_mode("New Mode");
++	return 0;
++}
++
++U_BOOT_CMD(
++	qspi, 5, 1, do_qspi,
++	"Change QSPI XIP Mode",
++	"[single|ddr_adj] [a1|(a4)] [d1|(d4)] [(sdr)|ddr]\n"
++	"  (xx) means default value if not specified\n"
++	"  'a4' requires 'd4' to be set\n"
++	"  'ddr' requires 'd4' and 'a4' to be set\n"
++	"  'ddr_adj' (no argument) calculates the timing adjustment for DDR mode\n"
++	"  'ddr_adj ##' (with argument) sets the timing adjustment index for DDR mode"
++);
+diff --git a/configs/rza2mevb_defconfig b/configs/rza2mevb_defconfig
+index 59ae2d84..8620ca89 100644
+--- a/configs/rza2mevb_defconfig
++++ b/configs/rza2mevb_defconfig
+@@ -14,3 +14,4 @@ CONFIG_MTD=y
+ CONFIG_SPI_FLASH=y
+ CONFIG_SPI_FLASH_MACRONIX=y
+ CONFIG_CMD_BOOTX=y
++CONFIG_CMD_RZA2_QSPI=y
+-- 
+2.34.1
+

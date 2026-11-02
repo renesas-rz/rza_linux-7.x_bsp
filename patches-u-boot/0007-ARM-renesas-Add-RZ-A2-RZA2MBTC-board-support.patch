@@ -1,0 +1,251 @@
+From bcbcb0f59f678918ff9f1b78e77d41822582d8e3 Mon Sep 17 00:00:00 2001
+From: Magnus Damm <damm@opensource.se>
+Date: Sun, 6 Jul 2025 13:29:45 +0200
+Subject: [PATCH 07/13] ARM: renesas: Add RZ/A2 RZA2MBTC board support
+
+Add initial RZ/A2 RZA2MBTC  board support. Serial console, SPI Flash and
+Ethernet are known to work however on-board SDRAM is not yet enabled.
+
+Signed-off-by: Magnus Damm <damm@opensource.se>
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ Makefile                                  |  2 ++
+ arch/arm/dts/Makefile                     |  3 +-
+ arch/arm/dts/r7s9210-rza2mbtc-u-boot.dtsi | 28 +++++++++++++++++++
+ arch/arm/mach-renesas/Kconfig.rza2        |  4 +++
+ board/aprg/rza2mbtc/Kconfig               | 15 ++++++++++
+ board/aprg/rza2mbtc/MAINTAINERS           |  5 ++++
+ board/aprg/rza2mbtc/Makefile              |  1 +
+ board/aprg/rza2mbtc/rza2mbtc.c            | 34 +++++++++++++++++++++++
+ configs/rza2mbtc_defconfig                | 17 ++++++++++++
+ include/configs/rza2mbtc.h                | 27 ++++++++++++++++++
+ 10 files changed, 135 insertions(+), 1 deletion(-)
+ create mode 100644 arch/arm/dts/r7s9210-rza2mbtc-u-boot.dtsi
+ create mode 100644 board/aprg/rza2mbtc/Kconfig
+ create mode 100644 board/aprg/rza2mbtc/MAINTAINERS
+ create mode 100644 board/aprg/rza2mbtc/Makefile
+ create mode 100644 board/aprg/rza2mbtc/rza2mbtc.c
+ create mode 100644 configs/rza2mbtc_defconfig
+ create mode 100644 include/configs/rza2mbtc.h
+
+diff --git a/Makefile b/Makefile
+index 51014fe4..1b6240dd 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1086,9 +1086,11 @@ c_flags := $(KBUILD_CFLAGS) $(cpp_flags)
+ # U-Boot objects....order is important (i.e. start must be first)
+ 
+ HAVE_VENDOR_COMMON_LIB = $(if $(wildcard $(srctree)/board/$(VENDOR)/common/Makefile),y,n)
++HAVE_SOC_COMMON_LIB = $(if $(wildcard $(srctree)/board/$(SOC)/common/Makefile),y,n)
+ 
+ libs-$(CONFIG_API) += api/
+ libs-$(HAVE_VENDOR_COMMON_LIB) += board/$(VENDOR)/common/
++libs-$(HAVE_SOC_COMMON_LIB) += board/$(SOC)/common/
+ libs-y += boot/
+ libs-$(CONFIG_CMDLINE) += cmd/
+ libs-y += common/
+diff --git a/arch/arm/dts/Makefile b/arch/arm/dts/Makefile
+index ad7ce045..400b3204 100644
+--- a/arch/arm/dts/Makefile
++++ b/arch/arm/dts/Makefile
+@@ -869,7 +869,8 @@ dtb-$(CONFIG_RZA1) += \
+ 	r7s72100-gr-peach.dtb
+ 
+ dtb-$(CONFIG_RZA2) += \
+-	r7s9210-gr-mango.dtb
++	r7s9210-gr-mango.dtb \
++	r7s9210-rza2mbtc.dtb
+ 
+ dtb-$(CONFIG_RCAR_GEN3) += \
+ 	r8a779md-geist.dtb
+diff --git a/arch/arm/dts/r7s9210-rza2mbtc-u-boot.dtsi b/arch/arm/dts/r7s9210-rza2mbtc-u-boot.dtsi
+new file mode 100644
+index 00000000..5b3ec2e5
+--- /dev/null
++++ b/arch/arm/dts/r7s9210-rza2mbtc-u-boot.dtsi
+@@ -0,0 +1,28 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Device Tree Source extras for U-Boot for the RZ/A2M BTC board
++ * Based on GR Peach, Copyright (C) 2019 Marek Vasut <marek.vasut@gmail.com>
++ */
++
++/ {
++	soc {
++		bootph-all;
++	};
++};
++
++&ostm0 {
++	bootph-all;
++};
++
++&pinctrl {
++	bootph-all;
++};
++
++&scif1 {
++	bootph-all;
++	clock = <66666666>;     /* ToDo: Replace by DM clock driver */
++};
++
++&scif1_pins {
++	bootph-all;
++};
+diff --git a/arch/arm/mach-renesas/Kconfig.rza2 b/arch/arm/mach-renesas/Kconfig.rza2
+index 9ae495c9..b2cf4847 100644
+--- a/arch/arm/mach-renesas/Kconfig.rza2
++++ b/arch/arm/mach-renesas/Kconfig.rza2
+@@ -11,10 +11,14 @@ choice
+ config TARGET_GRMANGO
+ 	bool "GR-MANGO board"
+ 
++config TARGET_RZA2MBTC
++	bool "RZA2MBTC board"
++
+ endchoice
+ 
+ # Renesas Supported Boards
+ source "board/renesas/grmango/Kconfig"
+ 
++source "board/aprg/rza2mbtc/Kconfig"
+ 
+ endif
+diff --git a/board/aprg/rza2mbtc/Kconfig b/board/aprg/rza2mbtc/Kconfig
+new file mode 100644
+index 00000000..d4cc35fa
+--- /dev/null
++++ b/board/aprg/rza2mbtc/Kconfig
+@@ -0,0 +1,15 @@
++if TARGET_RZA2MBTC
++
++config SYS_SOC
++        default "renesas"
++
++config SYS_BOARD
++	default "rza2mbtc"
++
++config SYS_VENDOR
++	default "aprg"
++
++config SYS_CONFIG_NAME
++	default "rza2mbtc"
++
++endif
+diff --git a/board/aprg/rza2mbtc/MAINTAINERS b/board/aprg/rza2mbtc/MAINTAINERS
+new file mode 100644
+index 00000000..0b80fb0a
+--- /dev/null
++++ b/board/aprg/rza2mbtc/MAINTAINERS
+@@ -0,0 +1,5 @@
++RZA2MBTC BOARD
++M:	Magnus Damm <damm@opensource.se>
++F:	arch/arm/dts/r7s9210*
++F:	board/aprg/rza2mbtc/
++N:	rza2mbtc
+diff --git a/board/aprg/rza2mbtc/Makefile b/board/aprg/rza2mbtc/Makefile
+new file mode 100644
+index 00000000..ca1804c5
+--- /dev/null
++++ b/board/aprg/rza2mbtc/Makefile
+@@ -0,0 +1 @@
++obj-y	:= rza2mbtc.o
+diff --git a/board/aprg/rza2mbtc/rza2mbtc.c b/board/aprg/rza2mbtc/rza2mbtc.c
+new file mode 100644
+index 00000000..6c3ea053
+--- /dev/null
++++ b/board/aprg/rza2mbtc/rza2mbtc.c
+@@ -0,0 +1,34 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright (C) 2017 Renesas Electronics
++ * Copyright (C) Chris Brandt
++ */
++
++#include <init.h>
++#include <asm/global_data.h>
++
++DECLARE_GLOBAL_DATA_PTR;
++
++int board_init(void)
++{
++	gd->bd->bi_boot_params = CFG_SYS_SDRAM_BASE + 0x100;
++	return 0;
++}
++
++/*
++ * Make use of the RZ/A2M on-chip memory which is 4 MiB at CFG_SYS_SDRAM_BASE.
++ */
++
++int dram_init(void)
++{
++	gd->ram_base = CFG_SYS_SDRAM_BASE;
++	gd->ram_size = 4 << 20;
++	return 0;
++}
++
++int dram_init_banksize(void)
++{
++	gd->bd->bi_dram[0].start = gd->ram_base;
++	gd->bd->bi_dram[0].size = gd->ram_size;
++	return 0;
++}
+diff --git a/configs/rza2mbtc_defconfig b/configs/rza2mbtc_defconfig
+new file mode 100644
+index 00000000..a65678e7
+--- /dev/null
++++ b/configs/rza2mbtc_defconfig
+@@ -0,0 +1,17 @@
++#include <configs/renesas_rza2.config>
++
++CONFIG_ARM=y
++CONFIG_ARCH_RENESAS=y
++CONFIG_TEXT_BASE=0x00000000
++CONFIG_POSITION_INDEPENDENT=y
++CONFIG_DEFAULT_DEVICE_TREE="renesas/r7s9210-rza2mbtc"
++CONFIG_TARGET_RZA2MBTC=y
++
++CONFIG_DM_SPI_FLASH=y
++CONFIG_ENV_IS_IN_SPI_FLASH=y
++CONFIG_ENV_OFFSET=0xe0000
++CONFIG_ENV_SIZE=0x10000
++CONFIG_ENV_SECT_SIZE=0x10000
++CONFIG_MTD=y
++CONFIG_SPI_FLASH=y
++CONFIG_SPI_FLASH_MACRONIX=y
+diff --git a/include/configs/rza2mbtc.h b/include/configs/rza2mbtc.h
+new file mode 100644
+index 00000000..98c2e367
+--- /dev/null
++++ b/include/configs/rza2mbtc.h
+@@ -0,0 +1,27 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Configuration settings for the Renesas GRMANGO board
++ *
++ * Copyright (C) 2017-2019 Renesas Electronics
++ */
++
++#ifndef __GRMANGO_H
++#define __GRMANGO_H
++
++/* Internal RAM Size */
++/*
++ * u-boot will be relocated to internal RAM during boot.
++ * RZ/A2M = 4MB
++ */
++#define CFG_SYS_SDRAM_BASE           0x80000000
++#define CFG_SYS_SDRAM_SIZE           (4 * 1024 * 1024)
++
++/* Network interface */
++#define CFG_SH_ETHER_USE_PORT 1
++#define CFG_SH_ETHER_PHY_ADDR 0
++#define CFG_SH_ETHER_PHY_MODE PHY_INTERFACE_MODE_RMII
++#define CFG_SH_ETHER_CACHE_WRITEBACK
++#define CFG_SH_ETHER_CACHE_INVALIDATE
++#define CFG_SH_ETHER_ALIGNE_SIZE	64
++
++#endif	/* __GRMANGO_H */
+-- 
+2.34.1
+

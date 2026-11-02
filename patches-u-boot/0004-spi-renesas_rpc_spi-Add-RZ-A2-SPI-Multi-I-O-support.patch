@@ -1,0 +1,63 @@
+From 5c55c238d0706baea0b4823eaf3bf143d28c0e5f Mon Sep 17 00:00:00 2001
+From: Magnus Damm <damm@opensource.se>
+Date: Sun, 6 Jul 2025 13:29:22 +0200
+Subject: [PATCH 04/13] spi: renesas_rpc_spi: Add RZ/A2 SPI Multi I/O support
+
+Add SPI Multi I/O Bus (also known as RPC SPI) support for RZ/A2 r7s9210.
+
+Tested on RZ/A1H Genmai with U6 S25FL512S-16 by Spansion.
+Tested on RZ/A2M RZA2MBTC with U2 MX25L51245GXDI-08G by Macronix.
+In the latter case the SPI flash is also used as boot media.
+
+Signed-off-by: Magnus Damm <damm@opensource.se>
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ drivers/spi/Kconfig           | 8 ++++----
+ drivers/spi/renesas_rpc_spi.c | 3 ++-
+ 2 files changed, 6 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/spi/Kconfig b/drivers/spi/Kconfig
+index 007ad5e7..8cc3499e 100644
+--- a/drivers/spi/Kconfig
++++ b/drivers/spi/Kconfig
+@@ -465,12 +465,12 @@ config SPI_QUP
+ 
+ config RENESAS_RPC_SPI
+ 	bool "Renesas RPC SPI driver"
+-	depends on RCAR_64 || RZA1
++	depends on RCAR_64 || RZA1 || RZA2
+ 	imply SPI_FLASH_SFDP_SUPPORT
+ 	help
+-	  Enable the Renesas RPC SPI driver, used to access SPI NOR flash
+-	  on Renesas R-Car Gen3 SoCs. This uses driver model and requires a
+-	  device tree binding to operate.
++	 Enable the Renesas RPC SPI driver, used to access SPI NOR flash
++	 on Renesas R-Car Gen3 and RZ/A series of SoCs. This uses driver model
++	 and requires a device tree binding to operate.
+ 
+ config ROCKCHIP_SFC
+ 	bool "Rockchip SFC Driver"
+diff --git a/drivers/spi/renesas_rpc_spi.c b/drivers/spi/renesas_rpc_spi.c
+index 76eca538..3ea0a4ab 100644
+--- a/drivers/spi/renesas_rpc_spi.c
++++ b/drivers/spi/renesas_rpc_spi.c
+@@ -207,7 +207,7 @@ static void rpc_spi_flush_read_cache(struct udevice *dev)
+ 
+ static u32 rpc_spi_get_strobe_delay(void)
+ {
+-#ifndef CONFIG_RZA1
++#if !defined(CONFIG_RZA1) && !defined(CONFIG_RZA2)
+ 	u32 cpu_type = renesas_get_cpu_type();
+ 
+ 	/*
+@@ -464,6 +464,7 @@ static const struct dm_spi_ops rpc_spi_ops = {
+ 
+ static const struct udevice_id rpc_spi_ids[] = {
+ 	{ .compatible = "renesas,r7s72100-rpc-if" },
++	{ .compatible = "renesas,r7s9210-rpc-if" },
+ 	{ .compatible = "renesas,rcar-gen3-rpc-if" },
+ 	{ .compatible = "renesas,rcar-gen4-rpc-if" },
+ 	{ .compatible = "renesas,rcar-gen5-rpc-if" },
+-- 
+2.34.1
+

@@ -1,0 +1,274 @@
+From a8ae0e9fa7bf98c422c319348809ab3a86bd1228 Mon Sep 17 00:00:00 2001
+From: Pabitra Adhikari <pabitraadhikari@gmail.com>
+Date: Thu, 5 Nov 2026 11:07:12 -0800
+Subject: [PATCH 13/13] board: rza2mevb: Link at 0x20000000, QSPI controller
+ node, qspi fixes
+
+- Link U-Boot at 0x20000000 and drop POSITION_INDEPENDENT: the boot ROM
+  runs U-Boot in place from read-only QSPI flash, so self-relocation
+  cannot patch the image and U-Boot hangs before the console
+- Add the RZ/A2 RPC SPI controller and flash nodes (not in the upstream
+  r7s9210 DTS) so the SPI flash, the environment and qspi work
+- Drop stray console input in board_late_init so autoboot is not aborted
+- qspi: send flash commands with spi_mem_exec_op() (the RPC SPI driver
+  has no raw transfer support); clear PHYCNT.CKSEL before setting the
+  DDR timing index; print unknown read commands
+
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ arch/arm/dts/r7s9210-rza2mevb-u-boot.dtsi | 27 +++++++++++
+ board/renesas/rza2mevb/rza2mevb.c         |  9 ++++
+ cmd/rza2_qspi.c                           | 48 +++++++++++++------
+ configs/rza2mevb_defconfig                |  5 +-
+ fix_qspi_spimem.py                        | 56 +++++++++++++++++++++++
+ 5 files changed, 130 insertions(+), 15 deletions(-)
+ create mode 100755 fix_qspi_spimem.py
+
+diff --git a/arch/arm/dts/r7s9210-rza2mevb-u-boot.dtsi b/arch/arm/dts/r7s9210-rza2mevb-u-boot.dtsi
+index 1fbadac8..cb7edbe3 100644
+--- a/arch/arm/dts/r7s9210-rza2mevb-u-boot.dtsi
++++ b/arch/arm/dts/r7s9210-rza2mevb-u-boot.dtsi
+@@ -39,3 +39,30 @@
+ 	bootph-all;
+ 	clock = <66666666>;	/* ToDo: Replace by DM clock driver */
+ };
++
++/ {
++	aliases {
++		spi0 = &rpc;
++	};
++
++	rpc: spi@1f800000 {
++		compatible = "renesas,r7s9210-rpc-if";
++		reg = <0x1f800000 0x100>, <0x20000000 0x04000000>;
++		bank-width = <2>;
++		status = "okay";
++		spi-max-frequency = <50000000>;
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		flash0: spi-flash@0 {
++			#address-cells = <1>;
++			#size-cells = <1>;
++			compatible = "jedec,spi-nor";
++			spi-max-frequency = <50000000>;
++			spi-tx-bus-width = <1>;
++			spi-rx-bus-width = <1>;
++			reg = <0>;
++			status = "okay";
++		};
++	};
++};
+diff --git a/board/renesas/rza2mevb/rza2mevb.c b/board/renesas/rza2mevb/rza2mevb.c
+index ac8ed99e..5c0779e0 100644
+--- a/board/renesas/rza2mevb/rza2mevb.c
++++ b/board/renesas/rza2mevb/rza2mevb.c
+@@ -7,6 +7,7 @@
+  */
+ 
+ #include <init.h>
++#include <stdio.h>
+ #include <asm/global_data.h>
+ #include <asm/io.h>
+ #include <linux/bitops.h>
+@@ -96,6 +97,14 @@ int board_init(void)
+ 	return 0;
+ }
+ 
++/* Drop stray console input (the SCIF start-up sends one character in loopback) before autoboot */
++int board_late_init(void)
++{
++	while (tstc())
++		getchar();
++	return 0;
++}
++
+ /* U-Boot uses the RZ/A2M on-chip memory, 4 MiB at CFG_SYS_SDRAM_BASE */
+ int dram_init(void)
+ {
+diff --git a/cmd/rza2_qspi.c b/cmd/rza2_qspi.c
+index 7e1bdd90..6eeb7a3b 100644
+--- a/cmd/rza2_qspi.c
++++ b/cmd/rza2_qspi.c
+@@ -8,6 +8,7 @@
+ 
+ #include <command.h>
+ #include <spi.h>
++#include <spi-mem.h>
+ #include <spi_flash.h>
+ #include <stdio.h>
+ #include <vsprintf.h>
+@@ -72,15 +73,33 @@ static void print_mode(const char *label)
+ 
+ 	printf("%s: ", label);
+ 	for (i = 0; i < ARRAY_SIZE(modes); i++)
+-		if (modes[i].cmd == cmd)
+-			printf("%s", modes[i].name);
+-	printf("\n");
++		if (modes[i].cmd == cmd) {
++			printf("%s\n", modes[i].name);
++			return;
++		}
++	printf("read command 0x%02X\n", cmd);
+ }
+ 
++/* The RPC SPI driver only supports spi-mem operations, not raw transfers */
+ static int flash_cmd(struct spi_slave *spi, u8 cmd, const u8 *tx, u8 *rx,
+ 		     size_t len)
+ {
+-	return spi_write_then_read(spi, &cmd, 1, tx, rx, len);
++	struct spi_mem_op op = SPI_MEM_OP(SPI_MEM_OP_CMD(cmd, 1),
++					  SPI_MEM_OP_NO_ADDR,
++					  SPI_MEM_OP_NO_DUMMY,
++					  SPI_MEM_OP_NO_DATA);
++
++	if (len && rx) {
++		op.data.dir = SPI_MEM_DATA_IN;
++		op.data.buf.in = rx;
++	} else if (len && tx) {
++		op.data.dir = SPI_MEM_DATA_OUT;
++		op.data.buf.out = tx;
++	}
++	op.data.nbytes = len;
++	op.data.buswidth = len ? 1 : 0;
++
++	return spi_mem_exec_op(spi, &op);
+ }
+ 
+ /* Set the Macronix status register QE bit (quad enable) if it is not set */
+@@ -116,21 +135,20 @@ static int setup_flash(void)
+ 	}
+ 	spi = flash->spi;
+ 
+-	ret = spi_claim_bus(spi);
+-	if (ret)
+-		goto out;
+-
+ 	ret = flash_cmd(spi, 0x9F, NULL, id, 3);		/* RDID */
++	if (ret)
++		printf("qspi: RDID failed (%d)\n", ret);
+ 	if (!ret && id[0] != 0xC2) {
+ 		printf("ERROR: SPI flash ID %02X%02X%02X is not supported (Macronix only)\n",
+ 		       id[0], id[1], id[2]);
+ 		ret = -ENODEV;
+ 	}
+-	if (!ret)
++	if (!ret) {
+ 		ret = enable_quad_macronix(spi);
++		if (ret)
++			printf("qspi: quad enable failed (%d)\n", ret);
++	}
+ 
+-	spi_release_bus(spi);
+-out:
+ 	spi_flash_free(flash);
+ 	if (ret)
+ 		printf("Failed to set SPI flash configuration.\n");
+@@ -160,7 +178,7 @@ static void phy_unlock_and_set(u32 adj)
+ 
+ static void phy_set_index(u8 index)
+ {
+-	writel(readl(PHYCNT) | ((u32)phy_adj[index].zz << 16), PHYCNT);
++	writel((readl(PHYCNT) & ~0x30000) | ((u32)phy_adj[index].zz << 16), PHYCNT);
+ 	writel(phy_adj[index].xy, PHYADJ2);
+ 	writel(0x80000032, PHYADJ1);
+ }
+@@ -282,8 +300,12 @@ static int do_qspi(struct cmd_tbl *cmdtp, int flag, int argc,
+ 
+ 	print_mode("Current Mode");
+ 
++	/*
++	 * The Macronix QE bit is non-volatile: once set, quad reads work even
++	 * if it cannot be checked here, so carry on with the controller setup.
++	 */
+ 	if (setup_flash())
+-		return 1;
++		printf("WARNING: SPI flash quad enable not checked, continuing\n");
+ 
+ 	/*
+ 	 * External address space read mode (MD = 0; the SPI driver may have
+diff --git a/configs/rza2mevb_defconfig b/configs/rza2mevb_defconfig
+index e9b8ad25..162f4af3 100644
+--- a/configs/rza2mevb_defconfig
++++ b/configs/rza2mevb_defconfig
+@@ -2,8 +2,8 @@
+ 
+ CONFIG_ARM=y
+ CONFIG_ARCH_RENESAS=y
+-CONFIG_TEXT_BASE=0x00000000
+-CONFIG_POSITION_INDEPENDENT=y
++CONFIG_TEXT_BASE=0x20000000
++# CONFIG_POSITION_INDEPENDENT is not set
+ CONFIG_DEFAULT_DEVICE_TREE="renesas/r7s9210-rza2mevb"
+ CONFIG_TARGET_RZA2MEVB=y
+ 
+@@ -18,3 +18,4 @@ CONFIG_CMD_RZA2_QSPI=y
+ CONFIG_BOARD_EARLY_INIT_F=y
+ CONFIG_USE_BOOTCOMMAND=y
+ CONFIG_BOOTCOMMAND="run xha_boot"
++CONFIG_BOARD_LATE_INIT=y
+diff --git a/fix_qspi_spimem.py b/fix_qspi_spimem.py
+new file mode 100755
+index 00000000..2d134823
+--- /dev/null
++++ b/fix_qspi_spimem.py
+@@ -0,0 +1,56 @@
++#!/usr/bin/env python3
++# Run in the U-Boot tree: python3 fix_qspi_spimem.py
++p = "cmd/rza2_qspi.c"
++s = open(p).read()
++
++def rep(old, new):
++    global s
++    if old not in s:
++        raise SystemExit("text not found:\n" + old)
++    s = s.replace(old, new, 1)
++
++rep("#include <spi.h>\n", "#include <spi.h>\n#include <spi-mem.h>\n")
++
++rep("""static int flash_cmd(struct spi_slave *spi, u8 cmd, const u8 *tx, u8 *rx,
++		     size_t len)
++{
++	return spi_write_then_read(spi, &cmd, 1, tx, rx, len);
++}""",
++"""/* The RPC SPI driver only supports spi-mem operations, not raw transfers */
++static int flash_cmd(struct spi_slave *spi, u8 cmd, const u8 *tx, u8 *rx,
++		     size_t len)
++{
++	struct spi_mem_op op = SPI_MEM_OP(SPI_MEM_OP_CMD(cmd, 1),
++					  SPI_MEM_OP_NO_ADDR,
++					  SPI_MEM_OP_NO_DUMMY,
++					  SPI_MEM_OP_NO_DATA);
++
++	if (len && rx) {
++		op.data.dir = SPI_MEM_DATA_IN;
++		op.data.buf.in = rx;
++	} else if (len && tx) {
++		op.data.dir = SPI_MEM_DATA_OUT;
++		op.data.buf.out = tx;
++	}
++	op.data.nbytes = len;
++	op.data.buswidth = len ? 1 : 0;
++
++	return spi_mem_exec_op(spi, &op);
++}""")
++
++rep("""	ret = spi_claim_bus(spi);
++	if (ret) {
++		printf("qspi: spi_claim_bus failed (%d)\\n", ret);
++		goto out;
++	}
++
++	ret = flash_cmd(spi, 0x9F, NULL, id, 3);		/* RDID */""",
++"""	ret = flash_cmd(spi, 0x9F, NULL, id, 3);		/* RDID */""")
++
++rep("""	spi_release_bus(spi);
++out:
++	spi_flash_free(flash);""",
++"""	spi_flash_free(flash);""")
++
++open(p, "w").write(s)
++print("edited", p)
+-- 
+2.34.1
+

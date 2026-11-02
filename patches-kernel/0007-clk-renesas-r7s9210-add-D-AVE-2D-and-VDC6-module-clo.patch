@@ -1,0 +1,29 @@
+From d82bd65b0816bd02daffa76edffd9fc4bf35b87d Mon Sep 17 00:00:00 2001
+From: Pabitra Adhikari <pabitraadhikari@gmail.com>
+Date: Fri, 30 Oct 2026 20:52:17 +0000
+Subject: [PATCH 07/11] clk: renesas: r7s9210: add D/AVE 2D and VDC6 module
+ clocks
+
+drw (MSTP 76, B clock) and vdc6 (MSTP 81, P1 clock). Needed by the D/AVE 2D and VDC6 framebuffer drivers.
+
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ drivers/clk/renesas/r7s9210-cpg-mssr.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/drivers/clk/renesas/r7s9210-cpg-mssr.c b/drivers/clk/renesas/r7s9210-cpg-mssr.c
+index a8ed87c11..47c712232 100644
+--- a/drivers/clk/renesas/r7s9210-cpg-mssr.c
++++ b/drivers/clk/renesas/r7s9210-cpg-mssr.c
+@@ -93,6 +93,8 @@ static const struct mssr_mod_clk r7s9210_mod_clks[] __initconst = {
+ 	DEF_MOD_STB("ether1",	 64,	R7S9210_CLK_B),
+ 	DEF_MOD_STB("ether0",	 65,	R7S9210_CLK_B),
+ 
++	DEF_MOD_STB("drw",	 76,	R7S9210_CLK_B),
++	DEF_MOD_STB("vdc6",	 81,	R7S9210_CLK_P1),
+ 	DEF_MOD_STB("spibsc",	 83,	R7S9210_CLK_P1),
+ 	DEF_MOD_STB("i2c3",	 84,	R7S9210_CLK_P1),
+ 	DEF_MOD_STB("i2c2",	 85,	R7S9210_CLK_P1),
+-- 
+2.34.1
+
