@@ -1,0 +1,52 @@
+From bfc8462bc4b1c1c064984a4aafdb5be097d95e41 Mon Sep 17 00:00:00 2001
+From: Pabitra Adhikari <pabitraadhikari@gmail.com>
+Date: Tue, 10 Nov 2026 15:05:54 -0800
+Subject: [PATCH 14/14] ARM: configs: rza2m_xip_defconfig: USB host, HID
+ multitouch, EXTCON
+
+Enable the EHCI/OHCI platform drivers and the RZ/A2 USB2 PHY for USB host, USB HID with multitouch for USB touch screens, and EXTCON, which the PHY driver needs for an OTG-managed channel.
+
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ arch/arm/configs/rza2m_xip_defconfig | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/arch/arm/configs/rza2m_xip_defconfig b/arch/arm/configs/rza2m_xip_defconfig
+index 7bab7c42a..d4c95a6c2 100644
+--- a/arch/arm/configs/rza2m_xip_defconfig
++++ b/arch/arm/configs/rza2m_xip_defconfig
+@@ -123,8 +123,12 @@ CONFIG_FRAMEBUFFER_CONSOLE=y
+ CONFIG_FRAMEBUFFER_CONSOLE_DETECT_PRIMARY=y
+ CONFIG_LOGO=y
+ CONFIG_DAVE2D=y
+-# CONFIG_HID_SUPPORT is not set
+-# CONFIG_USB_SUPPORT is not set
++CONFIG_HID_MULTITOUCH=y
++CONFIG_USB=y
++CONFIG_USB_EHCI_HCD=y
++CONFIG_USB_EHCI_HCD_PLATFORM=y
++CONFIG_USB_OHCI_HCD=y
++CONFIG_USB_OHCI_HCD_PLATFORM=y
+ CONFIG_MMC=y
+ CONFIG_NEW_LEDS=y
+ CONFIG_LEDS_CLASS=y
+@@ -153,14 +157,14 @@ CONFIG_DMADEVICES=y
+ # CONFIG_ARCH_R8A7794 is not set
+ # CONFIG_ARCH_R9A06G032 is not set
+ # CONFIG_ARCH_SH73A0 is not set
+-CONFIG_GENERIC_PHY=y
++CONFIG_EXTCON=y
++CONFIG_PHY_RCAR_GEN3_USB2=y
+ CONFIG_EEPROM_AT25=y
+ # CONFIG_DNOTIFY is not set
+ CONFIG_TMPFS=y
+ CONFIG_CONFIGFS_FS=y
+ CONFIG_CRAMFS=y
+ CONFIG_CRAMFS_MTD=y
+-CONFIG_NLS=y
+ CONFIG_NLS_CODEPAGE_437=y
+ CONFIG_NLS_ISO8859_1=y
+ CONFIG_KEYS=y
+-- 
+2.34.1
+

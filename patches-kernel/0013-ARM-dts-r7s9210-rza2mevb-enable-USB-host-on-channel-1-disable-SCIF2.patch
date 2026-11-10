@@ -1,0 +1,74 @@
+From 9691637e983ec1aa5ac0529f3b65e7b1263662b4 Mon Sep 17 00:00:00 2001
+From: Pabitra Adhikari <pabitraadhikari@gmail.com>
+Date: Tue, 10 Nov 2026 15:05:53 -0800
+Subject: [PATCH 13/14] ARM: dts: r7s9210-rza2mevb: enable USB host on channel
+ 1, disable SCIF2
+
+- Enable the OHCI controllers, needed for full- and low-speed devices such as touch controllers.
+
+- Route OVRCUR1 to P7_5 (SW6-1 and SW6-3 OFF). Without it the USB-A port (CN12) reports a permanent over-current and its VBUS stays off.
+
+- Mark usb2_phy1 as having no OTG pins, so its role comes from dr_mode.
+
+- Disable SCIF2: it is not the console on this board and, without a serial alias, it collides with the earlycon port (SCIF4).
+
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ arch/arm/boot/dts/renesas/r7s9210-rza2mevb.dts | 16 +++++++++++++---
+ 1 file changed, 13 insertions(+), 3 deletions(-)
+
+diff --git a/arch/arm/boot/dts/renesas/r7s9210-rza2mevb.dts b/arch/arm/boot/dts/renesas/r7s9210-rza2mevb.dts
+index a8bc4a32a..53a37b338 100644
+--- a/arch/arm/boot/dts/renesas/r7s9210-rza2mevb.dts
++++ b/arch/arm/boot/dts/renesas/r7s9210-rza2mevb.dts
+@@ -105,6 +105,14 @@ &ehci1 {
+ 	status = "okay";
+ };
+ 
++&ohci0 {
++	status = "okay";
++};
++
++&ohci1 {
++	status = "okay";
++};
++
+ &ether1 {
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&eth1_pins>;
+@@ -212,7 +220,8 @@ usb0_pins: usb0 {
+ 
+ 	usb1_pins: usb1 {
+ 		pinmux = <RZA2_PINMUX(PORTC, 0, 1)>,	/* VBUSIN1 */
+-			 <RZA2_PINMUX(PORTC, 5, 1)>;	/* VBUSEN1 */
++			 <RZA2_PINMUX(PORTC, 5, 1)>,	/* VBUSEN1 */
++			 <RZA2_PINMUX(PORT7, 5, 5)>;	/* OVRCUR1 (SW6-1 and SW6-3 OFF) */
+ 	};
+ };
+ 
+@@ -221,12 +230,12 @@ &rtc_x1_clk {
+ 	clock-frequency = <32768>;
+ };
+ 
+-/* Serial Console */
++/* SCIF2 on CN17 (camera connector): unused, the console is SCIF4 */
+ &scif2 {
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&scif2_pins>;
+ 
+-	status = "okay";
++	status = "disabled";
+ };
+ 
+ &scif4 {
+@@ -262,6 +271,7 @@ &usb2_phy1 {
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&usb1_pins>;
+ 	dr_mode = "host";
++	renesas,no-otg-pins;	/* no ID pin: role from dr_mode */
+ 	status = "okay";
+ };
+ 
+-- 
+2.34.1
+

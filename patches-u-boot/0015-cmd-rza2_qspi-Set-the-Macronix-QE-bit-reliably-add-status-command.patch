@@ -1,0 +1,232 @@
+From fc44fa897bd5ebd3c5803cec78b17b83172a2dc6 Mon Sep 17 00:00:00 2001
+From: Pabitra Adhikari <pabitraadhikari@gmail.com>
+Date: Thu, 12 Nov 2026 16:02:38 -0800
+Subject: [PATCH 15/15] cmd: rza2_qspi: Set the Macronix QE bit reliably, add
+ status command
+
+A new board can have the SPI flash QE bit clear; quad reads then return zeros and the board crashes at bootx. Write only the status register (1 byte), keep its other bits, wait for the write and read it back; report an error if QE is still clear.
+
+Add 'qspi status' to show SR/CR and 'qspi qe off' to clear QE for testing.
+
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ cmd/rza2_qspi.c | 147 ++++++++++++++++++++++++++++++++++++++++--------
+ 1 file changed, 125 insertions(+), 22 deletions(-)
+
+diff --git a/cmd/rza2_qspi.c b/cmd/rza2_qspi.c
+index 6eeb7a3b..88b49efd 100644
+--- a/cmd/rza2_qspi.c
++++ b/cmd/rza2_qspi.c
+@@ -14,6 +14,7 @@
+ #include <vsprintf.h>
+ #include <asm/global_data.h>
+ #include <asm/io.h>
++#include <linux/delay.h>
+ #include <linux/errno.h>
+ #include <linux/kernel.h>
+ #include <linux/string.h>
+@@ -102,40 +103,96 @@ static int flash_cmd(struct spi_slave *spi, u8 cmd, const u8 *tx, u8 *rx,
+ 	return spi_mem_exec_op(spi, &op);
+ }
+ 
+-/* Set the Macronix status register QE bit (quad enable) if it is not set */
+-static int enable_quad_macronix(struct spi_slave *spi)
++/* Macronix status register (SR) and configuration register (CR) bits */
++#define MX_SR_WIP			0x01	/* write in progress */
++#define MX_SR_WEL			0x02	/* write enable latch */
++#define MX_SR_QE			0x40	/* quad enable, non-volatile */
++#define MX_CR_DC			0xC0	/* dummy cycle select, 00b = counts used here */
++
++static int read_sr_cr(struct spi_slave *spi, u8 *sr, u8 *cr)
+ {
+-	u8 sr, wr[2] = { 0x40, 0x00 };
+ 	int ret;
+ 
+-	ret = flash_cmd(spi, 0x05, NULL, &sr, 1);		/* RDSR */
+-	if (ret || sr == 0x40)
+-		return ret;
++	ret = flash_cmd(spi, 0x05, NULL, sr, 1);		/* RDSR */
++	ret |= flash_cmd(spi, 0x15, NULL, cr, 1);		/* RDCR */
++	return ret;
++}
++
++/*
++ * Write the status register only (WREN + 1-byte WRSR; CR is left as it is) and
++ * wait for the write to finish (tW <= 40 ms). The SPI driver must send exactly
++ * one data byte: Macronix ignores WRSR unless CS# rises on a byte boundary.
++ */
++static int write_sr(struct spi_slave *spi, u8 sr)
++{
++	u8 st;
++	int ret, tries = 200;
+ 
+ 	ret = flash_cmd(spi, 0x06, NULL, NULL, 0);		/* WREN */
+-	ret |= flash_cmd(spi, 0x01, wr, NULL, 2);		/* WRSR */
+-	do
+-		ret |= flash_cmd(spi, 0x05, NULL, &sr, 1);
+-	while (!ret && (sr & 0x01));				/* WIP */
++	ret |= flash_cmd(spi, 0x01, &sr, NULL, 1);		/* WRSR */
++	if (ret)
++		return ret;
++
++	do {
++		mdelay(1);
++		ret = flash_cmd(spi, 0x05, NULL, &st, 1);
++	} while (!ret && (st & MX_SR_WIP) && --tries);
+ 
++	if (!ret && !tries)
++		ret = -ETIMEDOUT;
+ 	return ret;
+ }
+ 
+-static int setup_flash(void)
++/*
++ * Quad modes need the Macronix QE bit. It is non-volatile, so it is only
++ * written when it is clear (a new board). Other SR bits (block protection)
++ * are kept. The result is read back, so a write that did not take effect is
++ * reported instead of ending in a crash at bootx. CR.DC must be 00b for the
++ * dummy cycle counts used here; it is only reported, not changed.
++ */
++static int enable_quad_macronix(struct spi_slave *spi)
++{
++	u8 sr, cr;
++	int ret;
++
++	ret = read_sr_cr(spi, &sr, &cr);
++	if (ret)
++		return ret;
++	if (cr & MX_CR_DC)
++		printf("WARNING: SPI flash CR %02X: dummy cycle bits not default, quad reads may fail\n",
++		       cr);
++	if (sr & MX_SR_QE)
++		return 0;
++
++	printf("qspi: SPI flash SR %02X: setting QE\n", sr);
++	ret = write_sr(spi, (sr & ~(MX_SR_WIP | MX_SR_WEL)) | MX_SR_QE);
++	if (ret)
++		return ret;
++
++	ret = read_sr_cr(spi, &sr, &cr);
++	if (ret)
++		return ret;
++	printf("qspi: SPI flash SR %02X after write\n", sr);
++	if (!(sr & MX_SR_QE)) {
++		printf("ERROR: SPI flash did not accept the QE setting\n");
++		return -EIO;
++	}
++	return 0;
++}
++
++/* Probe the flash and check it is a Macronix part. Caller frees *flash. */
++static int open_flash(struct spi_flash **flash)
+ {
+-	struct spi_flash *flash;
+-	struct spi_slave *spi;
+ 	u8 id[3];
+ 	int ret;
+ 
+-	flash = spi_flash_probe(0, 0, 1000000, SPI_MODE_3);
+-	if (!flash) {
++	*flash = spi_flash_probe(0, 0, 1000000, SPI_MODE_3);
++	if (!*flash) {
+ 		printf("Failed to initialize SPI flash.\n");
+ 		return -ENODEV;
+ 	}
+-	spi = flash->spi;
+ 
+-	ret = flash_cmd(spi, 0x9F, NULL, id, 3);		/* RDID */
++	ret = flash_cmd((*flash)->spi, 0x9F, NULL, id, 3);	/* RDID */
+ 	if (ret)
+ 		printf("qspi: RDID failed (%d)\n", ret);
+ 	if (!ret && id[0] != 0xC2) {
+@@ -143,18 +200,57 @@ static int setup_flash(void)
+ 		       id[0], id[1], id[2]);
+ 		ret = -ENODEV;
+ 	}
++	return ret;
++}
++
++static int setup_flash(void)
++{
++	struct spi_flash *flash;
++	int ret;
++
++	ret = open_flash(&flash);
+ 	if (!ret) {
+-		ret = enable_quad_macronix(spi);
++		ret = enable_quad_macronix(flash->spi);
+ 		if (ret)
+ 			printf("qspi: quad enable failed (%d)\n", ret);
+ 	}
+-
+-	spi_flash_free(flash);
++	if (flash)
++		spi_flash_free(flash);
+ 	if (ret)
+ 		printf("Failed to set SPI flash configuration.\n");
+ 	return ret;
+ }
+ 
++/*
++ * 'qspi status' prints SR and CR. 'qspi qe off' clears QE (test only: it puts
++ * a board in the state of a new board, the next qspi quad command sets it
++ * again). Run them before the qspi read mode command or after a reset: the
++ * SPI driver leaves the controller out of XIP read mode.
++ */
++static int do_flash_status(int qe_off)
++{
++	struct spi_flash *flash;
++	u8 sr = 0, cr = 0;
++	int ret;
++
++	ret = open_flash(&flash);
++	if (!ret)
++		ret = read_sr_cr(flash->spi, &sr, &cr);
++	if (!ret && qe_off) {
++		ret = write_sr(flash->spi, sr & ~(MX_SR_WIP | MX_SR_WEL | MX_SR_QE));
++		if (!ret)
++			ret = read_sr_cr(flash->spi, &sr, &cr);
++	}
++	if (!ret)
++		printf("SPI flash SR %02X (QE %d), CR %02X (DC %d)\n",
++		       sr, !!(sr & MX_SR_QE), cr, (cr & MX_CR_DC) >> 6);
++	else
++		printf("qspi: SPI flash register access failed (%d)\n", ret);
++	if (flash)
++		spi_flash_free(flash);
++	return ret ? CMD_RET_FAILURE : 0;
++}
++
+ /* PHY timing adjustment table: PHYADJ2 value, PHYCNT.CKSEL */
+ static const struct {
+ 	u8 xy;
+@@ -264,6 +360,11 @@ static int do_qspi(struct cmd_tbl *cmdtp, int flag, int argc,
+ 		return 0;
+ 	}
+ 
++	if (!strcmp(argv[1], "status"))
++		return do_flash_status(0);
++	if (!strcmp(argv[1], "qe") && argc > 2 && !strcmp(argv[2], "off"))
++		return do_flash_status(1);
++
+ 	if (strcmp(argv[1], "single")) {
+ 		if (!strcmp(argv[1], "dual"))
+ 			printf("Dual SPI flash is not supported on this board\n");
+@@ -382,10 +483,12 @@ static int do_qspi(struct cmd_tbl *cmdtp, int flag, int argc,
+ U_BOOT_CMD(
+ 	qspi, 5, 1, do_qspi,
+ 	"Change QSPI XIP Mode",
+-	"[single|ddr_adj] [a1|(a4)] [d1|(d4)] [(sdr)|ddr]\n"
++	"[single|ddr_adj|status] [a1|(a4)] [d1|(d4)] [(sdr)|ddr]\n"
+ 	"  (xx) means default value if not specified\n"
+ 	"  'a4' requires 'd4' to be set\n"
+ 	"  'ddr' requires 'd4' and 'a4' to be set\n"
+ 	"  'ddr_adj' (no argument) calculates the timing adjustment for DDR mode\n"
+-	"  'ddr_adj ##' (with argument) sets the timing adjustment index for DDR mode"
++	"  'ddr_adj ##' (with argument) sets the timing adjustment index for DDR mode\n"
++	"  'status' shows the SPI flash status and configuration registers\n"
++	"  'qe off' clears the flash QE bit (test only; the next quad mode sets it again)"
+ );
+-- 
+2.34.1
+

@@ -1,0 +1,46 @@
+From 631ac04c3815d8af62f05eb336c129994d16a991 Mon Sep 17 00:00:00 2001
+From: Pabitra Adhikari <pabitraadhikari@gmail.com>
+Date: Tue, 10 Nov 2026 15:05:53 -0800
+Subject: [PATCH 12/14] phy: renesas: rcar-gen3-usb2: Use the PHY node's
+ dr_mode as a fallback
+
+rcar_gen3_get_dr_mode() only looks at the dr_mode of the USB controllers that use the PHY. A host-only channel served by generic EHCI/OHCI has no controller with dr_mode, so the channel is not treated as OTG-managed and USB2_COMMCTRL.OTG_PERI keeps its reset value. On RZ/A2M that value selects peripheral mode, and no device is ever detected on the host port.
+
+When no controller sets dr_mode, use the dr_mode property of the PHY node itself.
+
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ drivers/phy/renesas/phy-rcar-gen3-usb2.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/drivers/phy/renesas/phy-rcar-gen3-usb2.c b/drivers/phy/renesas/phy-rcar-gen3-usb2.c
+index b5ba75180..0a914c98b 100644
+--- a/drivers/phy/renesas/phy-rcar-gen3-usb2.c
++++ b/drivers/phy/renesas/phy-rcar-gen3-usb2.c
+@@ -1007,6 +1007,23 @@ static enum usb_dr_mode rcar_gen3_get_dr_mode(struct device_node *np)
+ 		}
+ 	}
+ 
++	/*
++	 * No controller using this PHY sets dr_mode (e.g. a host-only channel
++	 * with generic EHCI/OHCI): use the PHY node's own dr_mode, if any.
++	 */
++	if (candidate == USB_DR_MODE_UNKNOWN) {
++		const char *mode;
++
++		if (!of_property_read_string(np, "dr_mode", &mode)) {
++			if (!strcmp(mode, "host"))
++				candidate = USB_DR_MODE_HOST;
++			else if (!strcmp(mode, "peripheral"))
++				candidate = USB_DR_MODE_PERIPHERAL;
++			else if (!strcmp(mode, "otg"))
++				candidate = USB_DR_MODE_OTG;
++		}
++	}
++
+ 	return candidate;
+ }
+ 
+-- 
+2.34.1
+

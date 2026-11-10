@@ -25,7 +25,7 @@ Linux BSP for the RZ/A2M EVK based on mainline Linux 7.3. The kernel runs in pla
 
 ### Kernel patches
 
-`patches-kernel/` holds 11 patches on top of v7.3; each file name gives the change.
+`patches-kernel/` holds the patches on top of v7.3; each file name gives the change.
 
 ### U-Boot patches
 

@@ -1,0 +1,52 @@
+From 2e63945b7fee3f08ea9494294ae66f7fd65a9e2c Mon Sep 17 00:00:00 2001
+From: Pabitra Adhikari <pabitraadhikari@gmail.com>
+Date: Thu, 12 Nov 2026 16:02:38 -0800
+Subject: [PATCH 14/15] spi: renesas_rpc_spi: Send the exact data length for
+ short writes
+
+The driver always sends 32 bits of write data. A SPI NOR flash such as Macronix ignores WRSR (write status register) unless CS# is deasserted right after the last data byte, so 1- and 2-byte register writes did not take effect.
+
+Use an 8- or 16-bit transfer for writes of 1 or 2 bytes, as the Linux rpc-if driver does. Longer writes are unchanged.
+
+Signed-off-by: Pabitra Adhikari <pabitraadhikari@gmail.com>
+---
+ drivers/spi/renesas_rpc_spi.c | 23 ++++++++++++++++++++++-
+ 1 file changed, 22 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/spi/renesas_rpc_spi.c b/drivers/spi/renesas_rpc_spi.c
+index 3ea0a4ab..85577758 100644
+--- a/drivers/spi/renesas_rpc_spi.c
++++ b/drivers/spi/renesas_rpc_spi.c
+@@ -340,7 +340,28 @@ static int rpc_spi_mem_exec_op(struct spi_slave *spi,
+ 		writel(0, priv->regs + RPC_SMOPR);
+ 		writel(0, priv->regs + RPC_SMDRENR);
+ 
+-		if (dout && op->data.nbytes) {
++		if (dout && op->data.nbytes && op->data.nbytes <= 2) {
++			/*
++			 * Short writes (e.g. the flash status register): send
++			 * exactly 8 or 16 bits. The flash ignores the command
++			 * unless CS# rises right after the last data byte.
++			 */
++			const u8 *b = dout;
++
++			if (op->data.nbytes == 1) {
++				smenr |= RPC_SMENR_SPIDE(0x8);
++				writel(smenr, priv->regs + RPC_SMENR);
++				writeb(b[0], priv->regs + RPC_SMWDR0);
++			} else {
++				smenr |= RPC_SMENR_SPIDE(0xC);
++				writel(smenr, priv->regs + RPC_SMENR);
++				writew(b[0] | (b[1] << 8), priv->regs + RPC_SMWDR0);
++			}
++			writel(RPC_SMCR_SPIWE | RPC_SMCR_SPIE, priv->regs + RPC_SMCR);
++			ret = rpc_spi_wait_tend(spi->dev);
++			if (!ret)
++				ret = rpc_spi_wait_sslf(spi->dev);
++		} else if (dout && op->data.nbytes) {
+ 			u32 *datout = (u32 *)dout;
+ 			u32 wloop = DIV_ROUND_UP(op->data.nbytes, 4);
+ 
+-- 
+2.34.1
+
